@@ -153,7 +153,7 @@ function resolveActor_(telegramId) {
   return {
     telegramId: id,
     role: user.role,
-    classId: user.role === ROLES.TEACHER && user.class_id !== '' ? Number(user.class_id) : null,
+    classId: user.role === ROLES.TEACHER && user.class_id !== '' ? classIdKey_(user.class_id) : null,
     active: true
   };
 }
@@ -169,7 +169,7 @@ function canManageStudents_(actor) {
 function canManageStudentsInClass_(actor, classId) {
   if (!actor) return false;
   if (actor.role === ROLES.SUPER_ADMIN || actor.role === ROLES.ADMIN) return true;
-  return actor.role === ROLES.TEACHER && Number(actor.classId) === Number(classId);
+  return actor.role === ROLES.TEACHER && sameClassId_(actor.classId, classId);
 }
 
 function canManageUsers_(actor) {
@@ -179,7 +179,7 @@ function canManageUsers_(actor) {
 function canAccessClass_(actor, classId) {
   if (!actor) return false;
   if (actor.role === ROLES.SUPER_ADMIN || actor.role === ROLES.ADMIN) return true;
-  return actor.role === ROLES.TEACHER && Number(actor.classId) === Number(classId);
+  return actor.role === ROLES.TEACHER && sameClassId_(actor.classId, classId);
 }
 
 
@@ -189,6 +189,14 @@ function normalizeName_(value) {
   const name = String(value || '').trim().replace(/\s+/g, ' ');
   if (!name) throw new Error('Nom bo‘sh bo‘lishi mumkin emas.');
   return name;
+}
+
+function classIdKey_(value) {
+  return String(value === null || value === undefined ? '' : value).trim();
+}
+
+function sameClassId_(a, b) {
+  return classIdKey_(a) === classIdKey_(b);
 }
 
 function listActiveClasses_() {
@@ -214,10 +222,10 @@ function renameClass_(actor, classId, className) {
   const row = findRowByValue_(SHEETS.CLASSES, 'class_id', classId);
   if (!row || !(row.active === true || String(row.active).toLowerCase() === 'true')) throw new Error('Sinf topilmadi.');
   const name = normalizeName_(className);
-  const duplicate = listActiveClasses_().some(item => Number(item.class_id) !== Number(classId) && String(item.class_name).toLowerCase() === name.toLowerCase());
+  const duplicate = listActiveClasses_().some(item => !sameClassId_(item.class_id, classId) && String(item.class_name).toLowerCase() === name.toLowerCase());
   if (duplicate) throw new Error('Bunday sinf allaqachon mavjud.');
   updateObjectRow_(SHEETS.CLASSES, row._row, { class_name:name });
-  return { classId:Number(classId), className:name };
+  return { classId:classIdKey_(classId), className:name };
 }
 
 function deactivateClass_(actor, classId) {
@@ -227,7 +235,7 @@ function deactivateClass_(actor, classId) {
   const teacherId = String(row.teacher_telegram_id || '').trim();
   if (teacherId) {
     const teacher = findRowByValue_(SHEETS.USERS, 'telegram_id', teacherId);
-    if (teacher && teacher.role === ROLES.TEACHER && Number(teacher.class_id) === Number(classId)) {
+    if (teacher && teacher.role === ROLES.TEACHER && sameClassId_(teacher.class_id, classId)) {
       updateObjectRow_(SHEETS.USERS, teacher._row, { active:false, class_id:'' });
     }
     updateObjectRow_(SHEETS.CLASSES, row._row, { teacher_telegram_id:'' });
@@ -241,8 +249,40 @@ function deactivateClass_(actor, classId) {
 
 function listActiveStudentsByClass_(classId) {
   return listActiveRows_(SHEETS.STUDENTS)
-    .filter(row => Number(row.class_id) === Number(classId))
+    .filter(row => sameClassId_(row.class_id, classId))
     .sort((a,b) => String(a.full_name).localeCompare(String(b.full_name)));
+}
+
+function parseStudentNames_(text) {
+  const seen = {};
+  return String(text || '')
+    .split(/\r?\n|;/)
+    .map(value => String(value || '').trim().replace(/\s+/g, ' '))
+    .filter(name => {
+      if (!name) return false;
+      const key = name.toLowerCase();
+      if (seen[key]) return false;
+      seen[key] = true;
+      return true;
+    });
+}
+
+function addStudentsBulk_(actor, classId, text) {
+  const names = parseStudentNames_(text);
+  if (!names.length) throw new Error('Öquvçi ismlarini yuboring.');
+  const existing = {};
+  listActiveStudentsByClass_(classId).forEach(row => {
+    existing[String(row.full_name || '').trim().toLowerCase()] = true;
+  });
+  const added = [];
+  names.forEach(name => {
+    const key = name.toLowerCase();
+    if (existing[key]) return;
+    added.push(addStudent_(actor, classId, name));
+    existing[key] = true;
+  });
+  if (!added.length) throw new Error('Barcha yuborilgan öquvçilar allaqaçon sinfda mavjud.');
+  return added;
 }
 
 function addStudent_(actor, classId, fullName) {
@@ -251,8 +291,8 @@ function addStudent_(actor, classId, fullName) {
   if (!classRow || !(classRow.active === true || String(classRow.active).toLowerCase() === 'true')) throw new Error('Sinf topilmadi.');
   const name = normalizeName_(fullName);
   const studentId = nextNumericId_(SHEETS.STUDENTS, 'student_id');
-  appendObjectRow_(SHEETS.STUDENTS, { student_id:studentId, full_name:name, class_id:Number(classId), active:true });
-  return { studentId, fullName:name, classId:Number(classId) };
+  appendObjectRow_(SHEETS.STUDENTS, { student_id:studentId, full_name:name, class_id:classIdKey_(classId), active:true });
+  return { studentId, fullName:name, classId:classIdKey_(classId) };
 }
 
 function deactivateStudent_(actor, studentId) {
@@ -278,7 +318,7 @@ function upsertUser_(telegramId, fullName, role, classId, active) {
   const data = {
     full_name: normalizeName_(fullName),
     role: role,
-    class_id: classId === null || classId === undefined ? '' : Number(classId),
+    class_id: classId === null || classId === undefined ? '' : classIdKey_(classId),
     active: Boolean(active)
   };
   if (row) {
@@ -304,9 +344,9 @@ function claimClass_(telegramId, fullName, classId) {
     if (existing && (existing.active === true || String(existing.active).toLowerCase() === 'true')) {
       if (existing.role === ROLES.ADMIN) throw new Error('Admin sinf rahbari sifatida sinf tanlay olmaydi.');
       if (existing.role === ROLES.TEACHER && existing.class_id !== '') {
-        if (Number(existing.class_id) === Number(classId)) {
+        if (sameClassId_(existing.class_id, classId)) {
           const sameClass = findRowByValue_(SHEETS.CLASSES, 'class_id', classId);
-          return { classId:Number(classId), className:sameClass ? String(sameClass.class_name) : '', telegramId:id };
+          return { classId:classIdKey_(classId), className:sameClass ? String(sameClass.class_name) : '', telegramId:id };
         }
         throw new Error('Siz allaqachon boshqa sinfni olgansiz.');
       }
@@ -318,7 +358,7 @@ function claimClass_(telegramId, fullName, classId) {
 
     upsertUser_(id, fullName, ROLES.TEACHER, classId, true);
     updateObjectRow_(SHEETS.CLASSES, classRow._row, { teacher_telegram_id:id });
-    return { classId:Number(classId), className:String(classRow.class_name), telegramId:id };
+    return { classId:classIdKey_(classId), className:String(classRow.class_name), telegramId:id };
   } finally {
     lock.releaseLock();
   }
@@ -375,10 +415,10 @@ function normalizeDateKey_(date) {
 function loadAttendance_(classId, date) {
   const dateKey = normalizeDateKey_(date);
   const students = listActiveRows_(SHEETS.STUDENTS)
-    .filter(row => Number(row.class_id) === Number(classId))
+    .filter(row => sameClassId_(row.class_id, classId))
     .sort((a,b) => String(a.full_name).localeCompare(String(b.full_name)));
   const saved = getRowsAsObjects_(SHEETS.ATTENDANCE).filter(row =>
-    String(row.date) === dateKey && Number(row.class_id) === Number(classId)
+    String(row.date) === dateKey && sameClassId_(row.class_id, classId)
   );
   const byStudent = {};
   saved.forEach(row => byStudent[String(row.student_id)] = row.status);
@@ -401,7 +441,7 @@ function saveAttendance_(actor, classId, date, entries) {
   const classRow = findRowByValue_(SHEETS.CLASSES, 'class_id', classId);
   if (!classRow || !(classRow.active === true || String(classRow.active).toLowerCase() === 'true')) throw new Error('Sinf topilmadi.');
   const dateKey = normalizeDateKey_(date);
-  const activeStudents = listActiveRows_(SHEETS.STUDENTS).filter(row => Number(row.class_id) === Number(classId));
+  const activeStudents = listActiveRows_(SHEETS.STUDENTS).filter(row => sameClassId_(row.class_id, classId));
   const allowed = new Set(activeStudents.map(row => String(row.student_id)));
   const input = new Map((entries || []).map(entry => [String(entry.studentId), entry.status]));
   const sheet = getSheet_(SHEETS.ATTENDANCE);
@@ -414,11 +454,11 @@ function saveAttendance_(actor, classId, date, entries) {
     if (!allowed.has(sid)) return;
     const status = input.has(sid) ? input.get(sid) : ATTENDANCE_STATUS.KELDI;
     if (ATTENDANCE_CYCLE.indexOf(status) < 0) throw new Error('Davomat holati noto‘g‘ri.');
-    const match = existing.find(row => String(row.date) === dateKey && Number(row.class_id) === Number(classId) && String(row.student_id) === sid);
+    const match = existing.find(row => String(row.date) === dateKey && sameClassId_(row.class_id, classId) && String(row.student_id) === sid);
     if (match) {
       updateObjectRow_(SHEETS.ATTENDANCE, match._row, { status, updated_by: String(actor.telegramId), updated_at: now });
     } else {
-      sheet.appendRow([dateKey, Number(classId), Number(student.student_id), status, String(actor.telegramId), now]);
+      sheet.appendRow([dateKey, classIdKey_(classId), Number(student.student_id), status, String(actor.telegramId), now]);
     }
     savedEntries.push({ studentId:Number(student.student_id), fullName:String(student.full_name), status });
   });
@@ -680,7 +720,7 @@ function handleCommand_(message, actor) {
 
 function classChoiceKeyboard_(prefix, includeHistory) {
   const rows = listActiveClasses_().map(row => {
-    const classId = Number(row.class_id);
+    const classId = classIdKey_(row.class_id);
     if (includeHistory) {
       return [
         { text:String(row.class_name), callback_data:prefix + ':' + classId },
@@ -737,7 +777,7 @@ function showHistory_(chatId, actor, classId) {
   if (!canAccessClass_(actor, classId)) throw new Error('Ruxsat yo‘q.');
   const dates = [];
   getRowsAsObjects_(SHEETS.ATTENDANCE)
-    .filter(row => Number(row.class_id) === Number(classId))
+    .filter(row => sameClassId_(row.class_id, classId))
     .forEach(row => { const d = String(row.date); if (dates.indexOf(d) < 0) dates.push(d); });
   dates.sort().reverse();
   if (!dates.length) {
@@ -762,7 +802,12 @@ function handleText_(message, actor) {
     try {
       if (pending.type === 'ADD_CLASS') addClass_(actor, text);
       else if (pending.type === 'RENAME_CLASS') renameClass_(actor, pending.classId, text);
-      else if (pending.type === 'ADD_STUDENT') addStudent_(actor, pending.classId, text);
+      else if (pending.type === 'ADD_STUDENT') {
+        const addedStudents = addStudentsBulk_(actor, pending.classId, text);
+        clearPendingAction_(actor.telegramId);
+        sendMessage_(chatId, addedStudents.length + ' ta öquvçi qo‘şildi.', buildMainMenu_(actor));
+        return;
+      }
       else if (pending.type === 'ADD_ADMIN') {
         const parsed = parseTelegramPerson_(text);
         addAdmin_(actor, parsed.telegramId, parsed.fullName);
@@ -828,21 +873,21 @@ function handleCallback_(callbackQuery, actor) {
     const p = data.split(':');
     if (p[0] === 'claim' && p[1] === 'class') {
       if (actor.role !== ROLES.UNASSIGNED) throw new Error('Sizda allaqachon rol mavjud.');
-      const claimed = claimClass_(actor.telegramId, telegramDisplayName_(callbackQuery.from), Number(p[2]));
+      const claimed = claimClass_(actor.telegramId, telegramDisplayName_(callbackQuery.from), p[2]);
       if (messageId) editMessage_(chatId, messageId, claimed.className + ' sinf qabul qilindi.');
       const freshActor = resolveActor_(actor.telegramId);
       sendMessage_(chatId, 'Siz ' + claimed.className + ' sinf rahbarisiz.', buildMainMenu_(freshActor));
     } else if (p[0] === 'att' && p[1] === 'class') {
-      const classId = Number(p[2]);
+      const classId = p[2];
       if (!canAccessClass_(actor, classId)) throw new Error('Ruxsat yo‘q.');
       showAttendanceForClass_(chatId, messageId, actor, classId, p[3] || todayKey_(), Boolean(messageId));
     } else if (p[0] === 'att' && p[1] === 'cycle') {
-      const classId = Number(p[2]), studentId = Number(p[3]), date = p[4];
+      const classId = p[2], studentId = Number(p[3]), date = p[4];
       if (!canAccessClass_(actor, classId)) throw new Error('Ruxsat yo‘q.');
       cycleAttendanceDraft_(actor, classId, studentId, date);
       showAttendanceForClass_(chatId, messageId, actor, classId, date, true);
     } else if (p[0] === 'att' && p[1] === 'save') {
-      const classId = Number(p[2]), date = p[3];
+      const classId = p[2], date = p[3];
       if (!canAccessClass_(actor, classId)) throw new Error('Ruxsat yo‘q.');
       const entries = getAttendanceDraft_(actor, classId, date);
       const saved = saveAttendance_(actor, classId, date, entries);
@@ -852,9 +897,9 @@ function handleCallback_(callbackQuery, actor) {
       const text = String(classRow.class_name) + ' — ' + date + '\n\nKeldi: ' + s.KELDI + '\nSababli: ' + s.SABABLI + '\nSababsiz: ' + s.SABABSIZ;
       editMessage_(chatId, messageId, text, buildInlineKeyboard_([[{text:'Tahrirlash',callback_data:'att:class:'+classId+':'+date}]]));
     } else if (p[0] === 'hist' && p[1] === 'class') {
-      showHistory_(chatId, actor, Number(p[2]));
+      showHistory_(chatId, actor, p[2]);
     } else if (p[0] === 'hist' && p[1] === 'open') {
-      const classId = Number(p[2]);
+      const classId = p[2];
       if (!canAccessClass_(actor,classId)) throw new Error('Ruxsat yo‘q.');
       showAttendanceForClass_(chatId, messageId, actor, classId, p[3], Boolean(messageId));
     } else if (data === 'cls:add') {
@@ -863,7 +908,7 @@ function handleCallback_(callbackQuery, actor) {
       sendMessage_(chatId,'Sinf nomini yuboring.');
     } else if (p[0] === 'cls' && p[1] === 'open') {
       if (!canManageClasses_(actor)) throw new Error('Ruxsat yo‘q.');
-      const classId = Number(p[2]);
+      const classId = p[2];
       const row = findRowByValue_(SHEETS.CLASSES,'class_id',classId);
       if (!row || !(row.active === true || String(row.active).toLowerCase()==='true')) throw new Error('Sinf topilmadi.');
       sendMessage_(chatId,String(row.class_name),buildInlineKeyboard_([
@@ -872,20 +917,20 @@ function handleCallback_(callbackQuery, actor) {
       ]));
     } else if (p[0] === 'cls' && p[1] === 'rename') {
       if (!canManageClasses_(actor)) throw new Error('Ruxsat yo‘q.');
-      setPendingAction_(actor.telegramId,{type:'RENAME_CLASS',classId:Number(p[2])});
+      setPendingAction_(actor.telegramId,{type:'RENAME_CLASS',classId:p[2]});
       sendMessage_(chatId,'Yangi sinf nomini yuboring.');
     } else if (p[0] === 'cls' && p[1] === 'remove') {
-      deactivateClass_(actor,Number(p[2]));
+      deactivateClass_(actor,p[2]);
       sendMessage_(chatId,'Sinf öçirildi.');
     } else if (p[0] === 'stu' && p[1] === 'class') {
-      showStudentsForClass_(chatId, actor, Number(p[2]));
+      showStudentsForClass_(chatId, actor, p[2]);
     } else if (p[0] === 'stu' && p[1] === 'add') {
-      const classId = Number(p[2]);
+      const classId = p[2];
       if (!canManageStudentsInClass_(actor, classId)) throw new Error('Ruxsat yo‘q.');
       setPendingAction_(actor.telegramId,{type:'ADD_STUDENT',classId:classId});
-      sendMessage_(chatId,'Öquvçi ism-familiyasini yuboring.');
+      sendMessage_(chatId,'Öquvçilarni yuboring. Har bir öquvçi yangi qatorda bo‘lsin. Bir nechta öquvçini birdan yuborishingiz mumkin.');
     } else if (p[0] === 'stu' && p[1] === 'remove') {
-      deactivateStudent_(actor,Number(p[2]));
+      deactivateStudent_(actor,p[2]);
       sendMessage_(chatId,'Öquvçi çiqarildi.');
     } else if (data === 'settings:release') {
       const released = releaseOwnClass_(actor);

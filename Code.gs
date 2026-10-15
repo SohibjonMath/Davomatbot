@@ -523,6 +523,241 @@ function buildAttendanceView_(actor, classId, date) {
 }
 
 
+
+// ===== Statistics.gs =====
+
+function canViewStatistics_(actor) {
+  return Boolean(actor && (actor.role === ROLES.SUPER_ADMIN || actor.role === ROLES.ADMIN));
+}
+
+function statisticsActive_(value) {
+  return value === true || String(value).toLowerCase() === 'true';
+}
+
+function statisticsDateKey_(value) {
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  return String(value || '').slice(0, 10);
+}
+
+function statisticsPersonName_(users, superAdminId, telegramId) {
+  const id = String(telegramId || '').trim();
+  if (!id) return 'Noma’lum';
+  if (superAdminId && id === String(superAdminId)) return 'SUPER ADMIN';
+  const user = (users || []).find(row => String(row.telegram_id) === id);
+  return user && String(user.full_name || '').trim() ? String(user.full_name).trim() : ('Telegram ' + id);
+}
+
+function buildStatisticsModelFromRows_(classes, students, attendanceRows, users, superAdminId, dateKey) {
+  const activeClasses = (classes || []).filter(row => statisticsActive_(row.active));
+  const activeStudents = (students || []).filter(row => statisticsActive_(row.active));
+  const todayRows = (attendanceRows || []).filter(row => statisticsDateKey_(row.date) === String(dateKey));
+  const classStats = activeClasses.map(classRow => {
+    const classId = classIdKey_(classRow.class_id);
+    const classStudents = activeStudents.filter(row => sameClassId_(row.class_id, classId));
+    const classAttendance = todayRows.filter(row => sameClassId_(row.class_id, classId));
+    let latest = null;
+    classAttendance.forEach(row => {
+      if (!latest || String(row.updated_at || '') > String(latest.updated_at || '')) latest = row;
+    });
+    const byStudentId = {};
+    classStudents.forEach(row => byStudentId[String(row.student_id)] = String(row.full_name || ''));
+    const absent = [];
+    let keldi = 0, sababli = 0, sababsiz = 0;
+    classAttendance.forEach(row => {
+      if (row.status === ATTENDANCE_STATUS.KELDI) keldi += 1;
+      else if (row.status === ATTENDANCE_STATUS.SABABLI) {
+        sababli += 1;
+        absent.push({ studentId:String(row.student_id), studentName:byStudentId[String(row.student_id)] || ('ID ' + row.student_id), status:ATTENDANCE_STATUS.SABABLI });
+      } else if (row.status === ATTENDANCE_STATUS.SABABSIZ) {
+        sababsiz += 1;
+        absent.push({ studentId:String(row.student_id), studentName:byStudentId[String(row.student_id)] || ('ID ' + row.student_id), status:ATTENDANCE_STATUS.SABABSIZ });
+      }
+    });
+    const teacherId = String(classRow.teacher_telegram_id || '').trim();
+    return {
+      sheetRow: Number(classRow._row) || 0,
+      classId: classId,
+      className: String(classRow.class_name || classId),
+      teacherId: teacherId,
+      teacherName: teacherId ? statisticsPersonName_(users, superAdminId, teacherId) : 'Rahbar tanlanmagan',
+      totalStudents: classStudents.length,
+      submitted: classAttendance.length > 0,
+      submittedById: latest ? String(latest.updated_by || '') : '',
+      submittedByName: latest ? statisticsPersonName_(users, superAdminId, latest.updated_by) : '',
+      submittedAt: latest ? String(latest.updated_at || '') : '',
+      keldi: keldi,
+      sababli: sababli,
+      sababsiz: sababsiz,
+      absent: absent
+    };
+  }).sort((a,b) => a.className.localeCompare(b.className));
+
+  const absences = [];
+  classStats.forEach(item => item.absent.forEach(absent => absences.push({
+    classId:item.classId,
+    className:item.className,
+    studentId:absent.studentId,
+    studentName:absent.studentName,
+    status:absent.status
+  })));
+
+  return {
+    date:String(dateKey),
+    totalClasses:classStats.length,
+    submittedCount:classStats.filter(item => item.submitted).length,
+    missingCount:classStats.filter(item => !item.submitted).length,
+    totalStudents:classStats.reduce((sum,item) => sum + item.totalStudents, 0),
+    keldi:classStats.reduce((sum,item) => sum + item.keldi, 0),
+    sababli:classStats.reduce((sum,item) => sum + item.sababli, 0),
+    sababsiz:classStats.reduce((sum,item) => sum + item.sababsiz, 0),
+    classes:classStats,
+    absences:absences
+  };
+}
+
+function getTodayStatisticsModel_(dateKey) {
+  const date = dateKey || todayKey_();
+  const classes = typeof stabilizeAllClassIds_ === 'function' ? stabilizeAllClassIds_() : listActiveClasses_();
+  return buildStatisticsModelFromRows_(
+    classes,
+    getRowsAsObjects_(SHEETS.STUDENTS),
+    getRowsAsObjects_(SHEETS.ATTENDANCE),
+    getRowsAsObjects_(SHEETS.USERS),
+    getSuperAdminId_(),
+    date
+  );
+}
+
+function formatStatisticsTime_(value) {
+  if (!value) return '—';
+  const d = new Date(value);
+  if (isNaN(d.getTime())) return String(value);
+  return Utilities.formatDate(d, Session.getScriptTimeZone(), 'HH:mm');
+}
+
+function sendLongText_(chatId, text, replyMarkup) {
+  const max = 3500;
+  const lines = String(text || '').split('\n');
+  const chunks = [];
+  let current = '';
+  lines.forEach(line => {
+    const candidate = current ? current + '\n' + line : line;
+    if (candidate.length > max && current) {
+      chunks.push(current);
+      current = line;
+    } else {
+      current = candidate;
+    }
+  });
+  if (current || !chunks.length) chunks.push(current || '—');
+  chunks.forEach((chunk, index) => sendMessage_(chatId, chunk, index === chunks.length - 1 ? replyMarkup : null));
+}
+
+function statisticsBackKeyboard_() {
+  return buildInlineKeyboard_([[{text:'Statistikaga qaytish',callback_data:'stats:today'}]]);
+}
+
+function showStatisticsDashboard_(chatId, actor, dateKey) {
+  if (!canViewStatistics_(actor)) throw new Error('Ruxsat yo‘q.');
+  const model = getTodayStatisticsModel_(dateKey || todayKey_());
+  const text = 'Bugungi statistika — ' + model.date + '\n\n' +
+    'Sinflar: ' + model.totalClasses + '\n' +
+    'Davomat bergan: ' + model.submittedCount + '\n' +
+    'Davomat bermagan: ' + model.missingCount + '\n' +
+    'Jami öquvçi: ' + model.totalStudents + '\n' +
+    'Keldi: ' + model.keldi + '\n' +
+    'Sababli: ' + model.sababli + '\n' +
+    'Sababsiz: ' + model.sababsiz;
+  sendMessage_(chatId, text, buildInlineKeyboard_([
+    [{text:'Davomat berganlar',callback_data:'stats:submitted'},{text:'Davomat bermaganlar',callback_data:'stats:missing'}],
+    [{text:'Kelmaganlar',callback_data:'stats:absent'}],
+    [{text:'Sinf bo‘yicha',callback_data:'stats:classes'}]
+  ]));
+}
+
+function showSubmittedStatistics_(chatId, actor) {
+  if (!canViewStatistics_(actor)) throw new Error('Ruxsat yo‘q.');
+  const model = getTodayStatisticsModel_(todayKey_());
+  const items = model.classes.filter(item => item.submitted);
+  const lines = ['Davomat bergan sinflar — ' + model.date, ''];
+  if (!items.length) lines.push('Hali hech bir sinf davomat bermagan.');
+  items.forEach((item,index) => lines.push(
+    (index + 1) + '. ' + item.className +
+    '\nRahbar: ' + item.teacherName +
+    '\nTopshirgan: ' + item.submittedByName +
+    '\nVaqt: ' + formatStatisticsTime_(item.submittedAt) +
+    '\nKeldi ' + item.keldi + ' | Sababli ' + item.sababli + ' | Sababsiz ' + item.sababsiz
+  ));
+  sendLongText_(chatId, lines.join('\n'), statisticsBackKeyboard_());
+}
+
+function showMissingStatistics_(chatId, actor) {
+  if (!canViewStatistics_(actor)) throw new Error('Ruxsat yo‘q.');
+  const model = getTodayStatisticsModel_(todayKey_());
+  const items = model.classes.filter(item => !item.submitted);
+  const lines = ['Davomat bermagan sinflar — ' + model.date, ''];
+  if (!items.length) lines.push('Barcha sinflar davomat bergan.');
+  items.forEach((item,index) => lines.push((index + 1) + '. ' + item.className + ' — ' + item.teacherName + ' — ' + item.totalStudents + ' öquvçi'));
+  sendLongText_(chatId, lines.join('\n'), statisticsBackKeyboard_());
+}
+
+function showAbsentStatistics_(chatId, actor) {
+  if (!canViewStatistics_(actor)) throw new Error('Ruxsat yo‘q.');
+  const model = getTodayStatisticsModel_(todayKey_());
+  const lines = ['Bugun kelmaganlar — ' + model.date, ''];
+  if (!model.absences.length) {
+    lines.push('Sababli yoki sababsiz belgilangan öquvçi yo‘q.');
+  } else {
+    model.classes.forEach(item => {
+      if (!item.absent.length) return;
+      lines.push(item.className + ':');
+      item.absent.forEach(absent => lines.push('- ' + absent.studentName + ' — ' + (absent.status === ATTENDANCE_STATUS.SABABLI ? 'Sababli' : 'Sababsiz')));
+      lines.push('');
+    });
+  }
+  sendLongText_(chatId, lines.join('\n'), statisticsBackKeyboard_());
+}
+
+function showStatisticsClassChoice_(chatId, actor) {
+  if (!canViewStatistics_(actor)) throw new Error('Ruxsat yo‘q.');
+  const model = getTodayStatisticsModel_(todayKey_());
+  const rows = model.classes.map(item => [{text:item.className,callback_data:'stats:classrow:' + item.sheetRow}]);
+  rows.push([{text:'Statistikaga qaytish',callback_data:'stats:today'}]);
+  sendMessage_(chatId, 'Sinfni tanlang.', buildInlineKeyboard_(rows));
+}
+
+function showClassStatistics_(chatId, actor, sheetRow) {
+  if (!canViewStatistics_(actor)) throw new Error('Ruxsat yo‘q.');
+  const classRow = getClassBySheetRow_(sheetRow);
+  const classId = typeof ensureStableClassIdForRow_ === 'function' ? ensureStableClassIdForRow_(classRow) : classIdKey_(classRow.class_id);
+  const model = getTodayStatisticsModel_(todayKey_());
+  const item = model.classes.find(row => sameClassId_(row.classId, classId) || Number(row.sheetRow) === Number(sheetRow));
+  if (!item) throw new Error('Sinf topilmadi.');
+  const lines = [
+    item.className + ' — ' + model.date,
+    '',
+    'Rahbar: ' + item.teacherName,
+    'Holat: ' + (item.submitted ? 'Davomat berilgan' : 'Davomat berilmagan'),
+    'Jami öquvçi: ' + item.totalStudents
+  ];
+  if (item.submitted) {
+    lines.push('Topshirgan: ' + item.submittedByName);
+    lines.push('Vaqt: ' + formatStatisticsTime_(item.submittedAt));
+    lines.push('Keldi: ' + item.keldi);
+    lines.push('Sababli: ' + item.sababli);
+    lines.push('Sababsiz: ' + item.sababsiz);
+    if (item.absent.length) {
+      lines.push('');
+      lines.push('Kelmaganlar:');
+      item.absent.forEach(absent => lines.push('- ' + absent.studentName + ' — ' + (absent.status === ATTENDANCE_STATUS.SABABLI ? 'Sababli' : 'Sababsiz')));
+    }
+  }
+  sendLongText_(chatId, lines.join('\n'), buildInlineKeyboard_([
+    [{text:'Sinflar',callback_data:'stats:classes'}],
+    [{text:'Statistikaga qaytish',callback_data:'stats:today'}]
+  ]));
+}
+
 // ===== Telegram.gs =====
 
 function getTelegramToken_() {
@@ -570,9 +805,9 @@ function answerCallback_(callbackQueryId, text) {
 function buildMainMenu_(actor) {
   let keyboard = [];
   if (actor.role === ROLES.SUPER_ADMIN) {
-    keyboard = [['Davomat','Sinflar'],['Öquvçilar','Adminlar']];
+    keyboard = [['Davomat','Statistika'],['Sinflar','Öquvçilar'],['Adminlar']];
   } else if (actor.role === ROLES.ADMIN) {
-    keyboard = [['Davomat','Sinflar'],['Öquvçilar']];
+    keyboard = [['Davomat','Statistika'],['Sinflar','Öquvçilar']];
   } else if (actor.role === ROLES.TEACHER) {
     keyboard = [['Bugungi davomat','Öquvçilar'],['Oldingi davomatlar','Sozlamalar']];
   } else if (actor.role === ROLES.UNASSIGNED) {
@@ -926,6 +1161,11 @@ function handleText_(message, actor) {
     showTeacherSettings_(chatId, actor);
     return;
   }
+  if (text === 'Statistika') {
+    if (!canViewStatistics_(actor)) return sendMessage_(chatId,'Ruxsat yo‘q.');
+    showStatisticsDashboard_(chatId, actor, todayKey_());
+    return;
+  }
   if (text === 'Adminlar') {
     if (!canManageUsers_(actor)) return sendMessage_(chatId,'Ruxsat yo‘q.');
     showAdmins_(chatId);
@@ -1020,6 +1260,18 @@ function handleCallback_(callbackQuery, actor) {
       const freshActor = resolveActor_(actor.telegramId);
       sendMessage_(chatId, 'Sinf bo‘shatildi. Yangi sinf tanlashingiz mumkin.', buildMainMenu_(freshActor));
       showAvailableClasses_(chatId);
+    } else if (data === 'stats:today') {
+      showStatisticsDashboard_(chatId, actor, todayKey_());
+    } else if (data === 'stats:submitted') {
+      showSubmittedStatistics_(chatId, actor);
+    } else if (data === 'stats:missing') {
+      showMissingStatistics_(chatId, actor);
+    } else if (data === 'stats:absent') {
+      showAbsentStatistics_(chatId, actor);
+    } else if (data === 'stats:classes') {
+      showStatisticsClassChoice_(chatId, actor);
+    } else if (p[0] === 'stats' && p[1] === 'classrow') {
+      showClassStatistics_(chatId, actor, p[2]);
     } else if (data === 'admin:add') {
       if (!canManageUsers_(actor)) throw new Error('Ruxsat yo‘q.');
       setPendingAction_(actor.telegramId,{type:'ADD_ADMIN'});

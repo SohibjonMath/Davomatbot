@@ -15,8 +15,21 @@ function ensureSchema_() {
   return true;
 }
 
+function getWebAppUrl_() {
+  const url = PropertiesService.getScriptProperties().getProperty(PROPERTY_KEYS.WEB_APP_URL);
+  if (!url) throw new Error('WEB_APP_URL Script Properties ichida sozlanmagan.');
+  if (!/\/exec(?:[?#].*)?$/.test(url)) throw new Error('WEB_APP_URL /exec bilan tugashi kerak.');
+  return url;
+}
+
 function setTelegramWebhook_() {
-  const url = ScriptApp.getService().getUrl();
-  if (!url) throw new Error('Web App URL topilmadi.');
-  return telegramCall_('setWebhook', { url: url });
+  return telegramCall_('setWebhook', { url: getWebAppUrl_() });
+}
+
+function setupDavomatOne() {
+  return ensureSchema_();
+}
+
+function installTelegramWebhook() {
+  return setTelegramWebhook_();
 }

@@ -21,10 +21,6 @@ function routeUpdate_(update) {
   if (!update || typeof update !== 'object') return;
   if (update.message && update.message.from && update.message.chat) {
     const actor = resolveActor_(update.message.from.id);
-    if (!actor) {
-      sendMessage_(update.message.chat.id, 'Ruxsat yo‘q.');
-      return;
-    }
     const text = String(update.message.text || '').trim();
     if (text.charAt(0) === '/') handleCommand_(update.message, actor);
     else handleText_(update.message, actor);
@@ -32,19 +28,43 @@ function routeUpdate_(update) {
   }
   if (update.callback_query && update.callback_query.from) {
     const actor = resolveActor_(update.callback_query.from.id);
-    if (!actor) {
-      answerCallback_(update.callback_query.id, 'Ruxsat yo‘q.');
-      return;
-    }
     handleCallback_(update.callback_query, actor);
   }
+}
+
+function telegramDisplayName_(from) {
+  const first = String(from && from.first_name || '').trim();
+  const last = String(from && from.last_name || '').trim();
+  return (first + ' ' + last).trim() || ('Telegram ' + String(from && from.id || ''));
+}
+
+function showAvailableClasses_(chatId) {
+  const classes = listAvailableClasses_();
+  if (!classes.length) {
+    sendMessage_(chatId, 'Hozir bo‘sh sinf yo‘q.');
+    return;
+  }
+  const rows = classes.map(row => [{
+    text:String(row.class_name),
+    callback_data:'claim:class:' + row.class_id
+  }]);
+  sendMessage_(chatId, 'Bo‘sh sinfni tanlang.', buildInlineKeyboard_(rows));
 }
 
 function handleCommand_(message, actor) {
   const command = String(message.text || '').split(/\s+/)[0].toLowerCase();
   if (command === '/start') {
     clearPendingAction_(actor.telegramId);
+    if (actor.role === ROLES.UNASSIGNED) {
+      sendMessage_(message.chat.id, 'DavomatOne tayyor.', buildMainMenu_(actor));
+      showAvailableClasses_(message.chat.id);
+      return;
+    }
     sendMessage_(message.chat.id, 'DavomatOne tayyor.', buildMainMenu_(actor));
+    return;
+  }
+  if (actor.role === ROLES.UNASSIGNED) {
+    showAvailableClasses_(message.chat.id);
     return;
   }
   sendMessage_(message.chat.id, 'Menyudan tanlang.', buildMainMenu_(actor));
@@ -80,8 +100,13 @@ function showStudentsClassChoice_(chatId) {
   sendMessage_(chatId, 'Sinfni tanlang.', classChoiceKeyboard_('stu:class', false));
 }
 
-function showTeacherClassChoice_(chatId) {
-  sendMessage_(chatId, 'Sinfni tanlang.', classChoiceKeyboard_('teacher:class', false));
+function showStudentsForClass_(chatId, actor, classId) {
+  if (!canManageStudentsInClass_(actor, classId)) throw new Error('Ruxsat yo‘q.');
+  const classRow = findRowByValue_(SHEETS.CLASSES, 'class_id', classId);
+  if (!classRow || !(classRow.active === true || String(classRow.active).toLowerCase() === 'true')) throw new Error('Sinf topilmadi.');
+  const rows = listActiveStudentsByClass_(classId).map(st => [{text:String(st.full_name),callback_data:'stu:remove:'+st.student_id}]);
+  rows.push([{text:'Öquvçi qo‘şish',callback_data:'stu:add:'+classId}]);
+  sendMessage_(chatId, String(classRow.class_name) + ' öquvçilari', buildInlineKeyboard_(rows));
 }
 
 function showAdmins_(chatId) {
@@ -89,6 +114,15 @@ function showAdmins_(chatId) {
   const rows = admins.map(row => [{ text:String(row.full_name), callback_data:'admin:remove:' + row.telegram_id }]);
   rows.push([{ text:'Admin qo‘şish', callback_data:'admin:add' }]);
   sendMessage_(chatId, 'Adminlar', buildInlineKeyboard_(rows));
+}
+
+function showTeacherSettings_(chatId, actor) {
+  if (!actor || actor.role !== ROLES.TEACHER) throw new Error('Ruxsat yo‘q.');
+  const classRow = findRowByValue_(SHEETS.CLASSES, 'class_id', actor.classId);
+  if (!classRow) throw new Error('Sinf topilmadi.');
+  sendMessage_(chatId, 'Sozlamalar\nSinf: ' + String(classRow.class_name), buildInlineKeyboard_([
+    [{text:'Sinfdan voz keçish', callback_data:'settings:release'}]
+  ]));
 }
 
 function showHistory_(chatId, actor, classId) {
@@ -109,6 +143,12 @@ function showHistory_(chatId, actor, classId) {
 function handleText_(message, actor) {
   const chatId = message.chat.id;
   const text = String(message.text || '').trim();
+
+  if (actor.role === ROLES.UNASSIGNED) {
+    showAvailableClasses_(chatId);
+    return;
+  }
+
   const pending = getPendingAction_(actor.telegramId);
   if (pending) {
     try {
@@ -118,14 +158,11 @@ function handleText_(message, actor) {
       else if (pending.type === 'ADD_ADMIN') {
         const parsed = parseTelegramPerson_(text);
         addAdmin_(actor, parsed.telegramId, parsed.fullName);
-      } else if (pending.type === 'ASSIGN_TEACHER') {
-        const parsed = parseTelegramPerson_(text);
-        assignTeacher_(actor, pending.classId, parsed.telegramId, parsed.fullName);
       } else throw new Error('Amal topilmadi.');
       clearPendingAction_(actor.telegramId);
       sendMessage_(chatId, 'Saqlandi.', buildMainMenu_(actor));
     } catch (error) {
-      sendMessage_(chatId, error && error.message ? error.message : 'SaqLab bo‘lmadi.');
+      sendMessage_(chatId, error && error.message ? error.message : 'Saqlab bo‘lmadi.');
     }
     return;
   }
@@ -143,10 +180,26 @@ function handleText_(message, actor) {
     showHistory_(chatId, actor, actor.classId);
     return;
   }
-  if (text === 'Sinflar') { if (!canManageClasses_(actor)) return sendMessage_(chatId,'Ruxsat yo‘q.'); showClasses_(chatId); return; }
-  if (text === 'Öquvçilar') { if (!canManageStudents_(actor)) return sendMessage_(chatId,'Ruxsat yo‘q.'); showStudentsClassChoice_(chatId); return; }
-  if (text === 'Sinf rahbarlari') { if (!canManageUsers_(actor)) return sendMessage_(chatId,'Ruxsat yo‘q.'); showTeacherClassChoice_(chatId); return; }
-  if (text === 'Adminlar') { if (!canManageUsers_(actor)) return sendMessage_(chatId,'Ruxsat yo‘q.'); showAdmins_(chatId); return; }
+  if (text === 'Sinflar') {
+    if (!canManageClasses_(actor)) return sendMessage_(chatId,'Ruxsat yo‘q.');
+    showClasses_(chatId);
+    return;
+  }
+  if (text === 'Öquvçilar') {
+    if (actor.role === ROLES.TEACHER) showStudentsForClass_(chatId, actor, actor.classId);
+    else if (canManageStudents_(actor)) showStudentsClassChoice_(chatId);
+    else sendMessage_(chatId,'Ruxsat yo‘q.');
+    return;
+  }
+  if (text === 'Sozlamalar') {
+    showTeacherSettings_(chatId, actor);
+    return;
+  }
+  if (text === 'Adminlar') {
+    if (!canManageUsers_(actor)) return sendMessage_(chatId,'Ruxsat yo‘q.');
+    showAdmins_(chatId);
+    return;
+  }
   sendMessage_(chatId, 'Menyudan tanlang.', buildMainMenu_(actor));
 }
 
@@ -165,7 +218,13 @@ function handleCallback_(callbackQuery, actor) {
   const messageId = callbackQuery.message ? callbackQuery.message.message_id : null;
   try {
     const p = data.split(':');
-    if (p[0] === 'att' && p[1] === 'class') {
+    if (p[0] === 'claim' && p[1] === 'class') {
+      if (actor.role !== ROLES.UNASSIGNED) throw new Error('Sizda allaqachon rol mavjud.');
+      const claimed = claimClass_(actor.telegramId, telegramDisplayName_(callbackQuery.from), Number(p[2]));
+      if (messageId) editMessage_(chatId, messageId, claimed.className + ' sinf qabul qilindi.');
+      const freshActor = resolveActor_(actor.telegramId);
+      sendMessage_(chatId, 'Siz ' + claimed.className + ' sinf rahbarisiz.', buildMainMenu_(freshActor));
+    } else if (p[0] === 'att' && p[1] === 'class') {
       const classId = Number(p[2]);
       if (!canAccessClass_(actor, classId)) throw new Error('Ruxsat yo‘q.');
       showAttendanceForClass_(chatId, messageId, actor, classId, p[3] || todayKey_(), Boolean(messageId));
@@ -211,36 +270,21 @@ function handleCallback_(callbackQuery, actor) {
       deactivateClass_(actor,Number(p[2]));
       sendMessage_(chatId,'Sinf öçirildi.');
     } else if (p[0] === 'stu' && p[1] === 'class') {
-      if (!canManageStudents_(actor)) throw new Error('Ruxsat yo‘q.');
-      const classId = Number(p[2]);
-      const classRow = findRowByValue_(SHEETS.CLASSES,'class_id',classId);
-      if (!classRow || !(classRow.active === true || String(classRow.active).toLowerCase()==='true')) throw new Error('Sinf topilmadi.');
-      const rows = listActiveStudentsByClass_(classId).map(st => [{text:String(st.full_name),callback_data:'stu:remove:'+st.student_id}]);
-      rows.push([{text:'Öquvçi qo‘şish',callback_data:'stu:add:'+classId}]);
-      sendMessage_(chatId,String(classRow.class_name)+' öquvçilari',buildInlineKeyboard_(rows));
+      showStudentsForClass_(chatId, actor, Number(p[2]));
     } else if (p[0] === 'stu' && p[1] === 'add') {
-      if (!canManageStudents_(actor)) throw new Error('Ruxsat yo‘q.');
-      setPendingAction_(actor.telegramId,{type:'ADD_STUDENT',classId:Number(p[2])});
+      const classId = Number(p[2]);
+      if (!canManageStudentsInClass_(actor, classId)) throw new Error('Ruxsat yo‘q.');
+      setPendingAction_(actor.telegramId,{type:'ADD_STUDENT',classId:classId});
       sendMessage_(chatId,'Öquvçi ism-familiyasini yuboring.');
     } else if (p[0] === 'stu' && p[1] === 'remove') {
       deactivateStudent_(actor,Number(p[2]));
       sendMessage_(chatId,'Öquvçi çiqarildi.');
-    } else if (p[0] === 'teacher' && p[1] === 'class') {
-      if (!canManageUsers_(actor)) throw new Error('Ruxsat yo‘q.');
-      const classId = Number(p[2]);
-      const row = findRowByValue_(SHEETS.CLASSES,'class_id',classId);
-      if (!row) throw new Error('Sinf topilmadi.');
-      sendMessage_(chatId,String(row.class_name)+' sinf rahbari',buildInlineKeyboard_([
-        [{text:'Tayinlash / almaştirish',callback_data:'teacher:set:'+classId}],
-        [{text:'Rahbarni olib taşlash',callback_data:'teacher:remove:'+classId}]
-      ]));
-    } else if (p[0] === 'teacher' && p[1] === 'set') {
-      if (!canManageUsers_(actor)) throw new Error('Ruxsat yo‘q.');
-      setPendingAction_(actor.telegramId,{type:'ASSIGN_TEACHER',classId:Number(p[2])});
-      sendMessage_(chatId,'Format: TelegramID | Ism Familiya');
-    } else if (p[0] === 'teacher' && p[1] === 'remove') {
-      removeTeacher_(actor,Number(p[2]));
-      sendMessage_(chatId,'Sinf rahbari olib taşlandi.');
+    } else if (data === 'settings:release') {
+      const released = releaseOwnClass_(actor);
+      if (messageId) editMessage_(chatId, messageId, released.className + ' sinfdan voz keçildi.');
+      const freshActor = resolveActor_(actor.telegramId);
+      sendMessage_(chatId, 'Sinf bo‘shatildi. Yangi sinf tanlashingiz mumkin.', buildMainMenu_(freshActor));
+      showAvailableClasses_(chatId);
     } else if (data === 'admin:add') {
       if (!canManageUsers_(actor)) throw new Error('Ruxsat yo‘q.');
       setPendingAction_(actor.telegramId,{type:'ADD_ADMIN'});

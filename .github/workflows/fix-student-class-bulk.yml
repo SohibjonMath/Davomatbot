@@ -1,0 +1,134 @@
+name: Fix student class IDs and bulk add
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/fix-student-class-bulk.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Write regression test
+        shell: bash
+        run: |
+          cat > /tmp/test.js <<'NODE'
+          const fs = require('fs');
+          const vm = require('vm');
+          const assert = require('assert');
+          const code = fs.readFileSync('Code.gs', 'utf8');
+          const ctx = { console };
+          vm.createContext(ctx);
+          vm.runInContext(code, ctx);
+
+          ctx.listActiveClasses_ = () => [{ class_id: '05-01', class_name: '05-01' }];
+          const kb = ctx.classChoiceKeyboard_('stu:class', false);
+          assert.strictEqual(kb.inline_keyboard[0][0].callback_data, 'stu:class:05-01');
+          assert.strictEqual(ctx.canAccessClass_({ role: 'TEACHER', classId: '05-01' }, '05-01'), true);
+          assert.strictEqual(ctx.canManageStudentsInClass_({ role: 'TEACHER', classId: '05-01' }, '05-01'), true);
+          assert.deepStrictEqual(
+            Array.from(ctx.parseStudentNames_('Ali Valiyev\nVali Karimov\nAli Valiyev')),
+            ['Ali Valiyev', 'Vali Karimov']
+          );
+          console.log('student class + bulk add regression tests passed');
+          NODE
+
+      - name: Confirm RED before fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          if node /tmp/test.js; then
+            echo 'Expected regression test to fail before fix, but it passed.'
+            exit 1
+          fi
+          echo 'RED confirmed: string class IDs / bulk add are broken before fix.'
+
+      - name: Patch Code.gs
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('Code.gs')
+          s = p.read_text()
+
+          def once(old, new):
+              global s
+              if old not in s:
+                  raise SystemExit('Expected snippet not found:\n' + old[:240])
+              s = s.replace(old, new, 1)
+
+          once(
+          "function listActiveClasses_() {\n  return listActiveRows_(SHEETS.CLASSES).sort((a,b) => String(a.class_name).localeCompare(String(b.class_name)));\n}\n",
+          "function classIdKey_(value) {\n  return String(value === null || value === undefined ? '' : value).trim();\n}\n\nfunction sameClassId_(a, b) {\n  return classIdKey_(a) === classIdKey_(b);\n}\n\nfunction listActiveClasses_() {\n  return listActiveRows_(SHEETS.CLASSES).sort((a,b) => String(a.class_name).localeCompare(String(b.class_name)));\n}\n"
+          )
+
+          once(
+          "function listActiveStudentsByClass_(classId) {\n  return listActiveRows_(SHEETS.STUDENTS)\n    .filter(row => Number(row.class_id) === Number(classId))\n    .sort((a,b) => String(a.full_name).localeCompare(String(b.full_name)));\n}\n",
+          "function listActiveStudentsByClass_(classId) {\n  return listActiveRows_(SHEETS.STUDENTS)\n    .filter(row => sameClassId_(row.class_id, classId))\n    .sort((a,b) => String(a.full_name).localeCompare(String(b.full_name)));\n}\n\nfunction parseStudentNames_(text) {\n  const seen = {};\n  return String(text || '')\n    .split(/\\r?\\n|;/)\n    .map(value => String(value || '').trim().replace(/\\s+/g, ' '))\n    .filter(name => {\n      if (!name) return false;\n      const key = name.toLowerCase();\n      if (seen[key]) return false;\n      seen[key] = true;\n      return true;\n    });\n}\n\nfunction addStudentsBulk_(actor, classId, text) {\n  const names = parseStudentNames_(text);\n  if (!names.length) throw new Error('Öquvçi ismlarini yuboring.');\n  const existing = {};\n  listActiveStudentsByClass_(classId).forEach(row => {\n    existing[String(row.full_name || '').trim().toLowerCase()] = true;\n  });\n  const added = [];\n  names.forEach(name => {\n    const key = name.toLowerCase();\n    if (existing[key]) return;\n    added.push(addStudent_(actor, classId, name));\n    existing[key] = true;\n  });\n  if (!added.length) throw new Error('Barcha yuborilgan öquvçilar allaqaçon sinfda mavjud.');\n  return added;\n}\n"
+          )
+
+          replacements = {
+            "user.role === ROLES.TEACHER && user.class_id !== '' ? Number(user.class_id) : null": "user.role === ROLES.TEACHER && user.class_id !== '' ? classIdKey_(user.class_id) : null",
+            "Number(actor.classId) === Number(classId)": "sameClassId_(actor.classId, classId)",
+            "Number(item.class_id) !== Number(classId)": "!sameClassId_(item.class_id, classId)",
+            "return { classId:Number(classId), className:name };": "return { classId:classIdKey_(classId), className:name };",
+            "Number(teacher.class_id) === Number(classId)": "sameClassId_(teacher.class_id, classId)",
+            "class_id:Number(classId)": "class_id:classIdKey_(classId)",
+            "classId:Number(classId)": "classId:classIdKey_(classId)",
+            "class_id: classId === null || classId === undefined ? '' : Number(classId)": "class_id: classId === null || classId === undefined ? '' : classIdKey_(classId)",
+            "Number(existing.class_id) === Number(classId)": "sameClassId_(existing.class_id, classId)",
+            ".filter(row => Number(row.class_id) === Number(classId))": ".filter(row => sameClassId_(row.class_id, classId))",
+            "Number(row.class_id) === Number(classId)": "sameClassId_(row.class_id, classId)",
+            "Number(row.class_id)": "classIdKey_(row.class_id)",
+            "Number(classId)": "classIdKey_(classId)",
+            "Number(p[2])": "p[2]"
+          }
+          for old, new in replacements.items():
+              s = s.replace(old, new)
+
+          once(
+          "      else if (pending.type === 'ADD_STUDENT') addStudent_(actor, pending.classId, text);",
+          "      else if (pending.type === 'ADD_STUDENT') {\n        const addedStudents = addStudentsBulk_(actor, pending.classId, text);\n        clearPendingAction_(actor.telegramId);\n        sendMessage_(chatId, addedStudents.length + ' ta öquvçi qo‘şildi.', buildMainMenu_(actor));\n        return;\n      }"
+          )
+
+          s = s.replace(
+            "sendMessage_(chatId,'Öquvçi ism-familiyasini yuboring.');",
+            "sendMessage_(chatId,'Öquvçilarni yuboring. Har bir öquvçi yangi qatorda bo‘lsin. Bir nechta öquvçini birdan yuborishingiz mumkin.');"
+          )
+
+          p.write_text(s)
+          PY
+
+      - name: Verify GREEN
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp Code.gs /tmp/Code.js
+          node --check /tmp/Code.js
+          node /tmp/test.js
+          ! grep -q 'Number(actor.classId)' Code.gs
+          ! grep -q 'Number(classId)' Code.gs
+          ! grep -q 'Number(row.class_id)' Code.gs
+          grep -q 'function addStudentsBulk_' Code.gs
+          grep -q "ta öquvçi qo‘şildi" Code.gs
+          echo 'GREEN: string class IDs and bulk student add verified.'
+
+      - name: Remove temporary workflow
+        shell: bash
+        run: rm -f .github/workflows/fix-student-class-bulk.yml
+
+      - name: Commit fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Fix student class selection and bulk add"
+          git push

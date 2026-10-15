@@ -33,3 +33,16 @@ function setupDavomatOne() {
 function installTelegramWebhook() {
   return setTelegramWebhook_();
 }
+
+function diagnoseDavomatOne() {
+  const result = {};
+  const ss = getSpreadsheet_();
+  result.spreadsheet_id = ss.getId();
+  result.spreadsheet_name = ss.getName();
+  result.sheets = Object.keys(SHEET_HEADERS).map(name => ({ name: name, exists: Boolean(ss.getSheetByName(name)) }));
+  result.super_admin_id_set = Boolean(PropertiesService.getScriptProperties().getProperty(PROPERTY_KEYS.SUPER_ADMIN_ID));
+  result.web_app_url = getWebAppUrl_();
+  result.webhook = telegramCall_('getWebhookInfo', {});
+  console.log(JSON.stringify(result, null, 2));
+  return result;
+}

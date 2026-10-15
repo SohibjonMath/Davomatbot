@@ -756,8 +756,70 @@ function getClassBySheetRow_(rowNumber) {
   return obj;
 }
 
+function classIdIsCallbackSafe_(value) {
+  return /^[A-Za-z0-9_-]{1,32}$/.test(classIdKey_(value));
+}
+
+function migrateUniqueClassReferences_(oldId, newId) {
+  const oldKey = classIdKey_(oldId);
+  const newKey = classIdKey_(newId);
+  if (!oldKey || oldKey === newKey) return;
+  [SHEETS.STUDENTS, SHEETS.ATTENDANCE].forEach(sheetName => {
+    getRowsAsObjects_(sheetName).forEach(row => {
+      if (sameClassId_(row.class_id, oldKey)) {
+        updateObjectRow_(sheetName, row._row, { class_id:newKey });
+      }
+    });
+  });
+}
+
+function ensureStableClassIdForRow_(classRow, originalCounts) {
+  if (!classRow || !classRow._row) throw new Error('Sinf topilmadi.');
+  const current = classIdKey_(classRow.class_id);
+  const counts = originalCounts || {};
+  const duplicateCount = Object.prototype.hasOwnProperty.call(counts, current)
+    ? counts[current]
+    : listActiveClasses_().filter(row => sameClassId_(row.class_id, current)).length;
+  const needsChange = !current || duplicateCount !== 1 || !classIdIsCallbackSafe_(current);
+  if (!needsChange) return current;
+
+  const used = {};
+  listActiveClasses_().forEach(row => {
+    if (Number(row._row) !== Number(classRow._row)) {
+      const key = classIdKey_(row.class_id);
+      if (key) used[key] = true;
+    }
+  });
+  let stable = 'C' + String(classRow._row);
+  while (used[stable]) stable += '_';
+
+  if (current && duplicateCount === 1) migrateUniqueClassReferences_(current, stable);
+  updateObjectRow_(SHEETS.CLASSES, classRow._row, { class_id:stable });
+
+  const teacherId = String(classRow.teacher_telegram_id || '').trim();
+  if (teacherId) {
+    const teacher = findRowByValue_(SHEETS.USERS, 'telegram_id', teacherId);
+    if (teacher && teacher.role === ROLES.TEACHER) {
+      updateObjectRow_(SHEETS.USERS, teacher._row, { class_id:stable });
+    }
+  }
+  return stable;
+}
+
+function stabilizeAllClassIds_() {
+  const original = listActiveClasses_();
+  const counts = {};
+  original.forEach(row => {
+    const key = classIdKey_(row.class_id);
+    counts[key] = (counts[key] || 0) + 1;
+  });
+  original.forEach(row => ensureStableClassIdForRow_(row, counts));
+  return listActiveClasses_();
+}
+
 function showStudentsClassChoice_(chatId) {
-  const rows = listActiveClasses_().map(row => [{
+  const classes = stabilizeAllClassIds_();
+  const rows = classes.map(row => [{
     text: String(row.class_name),
     callback_data:'stu:classrow:' + row._row
   }]);
@@ -940,7 +1002,8 @@ function handleCallback_(callbackQuery, actor) {
       sendMessage_(chatId,'Sinf öçirildi.');
     } else if (p[0] === 'stu' && p[1] === 'classrow') {
     const classRow = getClassBySheetRow_(p[2]);
-    showStudentsForClass_(chatId, actor, classIdKey_(classRow.class_id));
+    const stableClassId = ensureStableClassIdForRow_(classRow);
+    showStudentsForClass_(chatId, actor, stableClassId);
     } else if (p[0] === 'stu' && p[1] === 'class') {
       showStudentsForClass_(chatId, actor, p[2]);
     } else if (p[0] === 'stu' && p[1] === 'add') {

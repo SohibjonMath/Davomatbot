@@ -1,0 +1,176 @@
+name: Fix student class identity
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/fix-student-class-identity.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Write regression test
+        shell: bash
+        run: |
+          cat > /tmp/test-class-identity.js <<'EOF'
+          const fs = require('fs');
+          const code = fs.readFileSync('Code.gs', 'utf8');
+          const required = [
+            'function stabilizeAllClassIds_()',
+            "const classes = stabilizeAllClassIds_();",
+            'const stableClassId = ensureStableClassIdForRow_(classRow);',
+            'showStudentsForClass_(chatId, actor, stableClassId)'
+          ];
+          for (const needle of required) {
+            if (!code.includes(needle)) {
+              console.error('Missing:', needle);
+              process.exit(1);
+            }
+          }
+          console.log('Stable class identity routing is present.');
+          EOF
+
+      - name: Confirm RED
+        shell: bash
+        run: |
+          if node /tmp/test-class-identity.js; then
+            echo 'Regression test unexpectedly passed before fix.'
+            exit 1
+          else
+            echo 'RED confirmed: student flow still depends on ambiguous class_id values.'
+          fi
+
+      - name: Patch Code.gs
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          p = Path('Code.gs')
+          s = p.read_text()
+
+          marker = "function showStudentsClassChoice_(chatId) {"
+          if marker not in s:
+              raise SystemExit('student class selector marker not found')
+
+          helper = r'''function classIdIsCallbackSafe_(value) {
+            return /^[A-Za-z0-9_-]{1,32}$/.test(classIdKey_(value));
+          }
+
+          function migrateUniqueClassReferences_(oldId, newId) {
+            const oldKey = classIdKey_(oldId);
+            const newKey = classIdKey_(newId);
+            if (!oldKey || oldKey === newKey) return;
+            [SHEETS.STUDENTS, SHEETS.ATTENDANCE].forEach(sheetName => {
+              getRowsAsObjects_(sheetName).forEach(row => {
+                if (sameClassId_(row.class_id, oldKey)) {
+                  updateObjectRow_(sheetName, row._row, { class_id:newKey });
+                }
+              });
+            });
+          }
+
+          function ensureStableClassIdForRow_(classRow, originalCounts) {
+            if (!classRow || !classRow._row) throw new Error('Sinf topilmadi.');
+            const current = classIdKey_(classRow.class_id);
+            const counts = originalCounts || {};
+            const duplicateCount = Object.prototype.hasOwnProperty.call(counts, current)
+              ? counts[current]
+              : listActiveClasses_().filter(row => sameClassId_(row.class_id, current)).length;
+            const needsChange = !current || duplicateCount !== 1 || !classIdIsCallbackSafe_(current);
+            if (!needsChange) return current;
+
+            const used = {};
+            listActiveClasses_().forEach(row => {
+              if (Number(row._row) !== Number(classRow._row)) {
+                const key = classIdKey_(row.class_id);
+                if (key) used[key] = true;
+              }
+            });
+            let stable = 'C' + String(classRow._row);
+            while (used[stable]) stable += '_';
+
+            if (current && duplicateCount === 1) migrateUniqueClassReferences_(current, stable);
+            updateObjectRow_(SHEETS.CLASSES, classRow._row, { class_id:stable });
+
+            const teacherId = String(classRow.teacher_telegram_id || '').trim();
+            if (teacherId) {
+              const teacher = findRowByValue_(SHEETS.USERS, 'telegram_id', teacherId);
+              if (teacher && teacher.role === ROLES.TEACHER) {
+                updateObjectRow_(SHEETS.USERS, teacher._row, { class_id:stable });
+              }
+            }
+            return stable;
+          }
+
+          function stabilizeAllClassIds_() {
+            const original = listActiveClasses_();
+            const counts = {};
+            original.forEach(row => {
+              const key = classIdKey_(row.class_id);
+              counts[key] = (counts[key] || 0) + 1;
+            });
+            original.forEach(row => ensureStableClassIdForRow_(row, counts));
+            return listActiveClasses_();
+          }
+
+          '''
+          s = s.replace(marker, helper + marker, 1)
+
+          old_selector = """function showStudentsClassChoice_(chatId) {
+            const rows = listActiveClasses_().map(row => [{
+              text: String(row.class_name),
+              callback_data:'stu:classrow:' + row._row
+            }]);
+            sendMessage_(chatId, 'Sinfni tanlang.', buildInlineKeyboard_(rows));
+          }
+          """
+          new_selector = """function showStudentsClassChoice_(chatId) {
+            const classes = stabilizeAllClassIds_();
+            const rows = classes.map(row => [{
+              text: String(row.class_name),
+              callback_data:'stu:classrow:' + row._row
+            }]);
+            sendMessage_(chatId, 'Sinfni tanlang.', buildInlineKeyboard_(rows));
+          }
+          """
+          if old_selector not in s:
+              raise SystemExit('current student selector block not found')
+          s = s.replace(old_selector, new_selector, 1)
+
+          pattern = re.compile(r"(\} else if \(p\[0\] === 'stu' && p\[1\] === 'classrow'\) \{\s*const classRow = getClassBySheetRow_\(p\[2\]\);\s*)showStudentsForClass_\(chatId, actor, classIdKey_\(classRow\.class_id\)\);", re.M)
+          repl = r"\1const stableClassId = ensureStableClassIdForRow_(classRow);\n    showStudentsForClass_(chatId, actor, stableClassId);"
+          s2, n = pattern.subn(repl, s, count=1)
+          if n != 1:
+              raise SystemExit('student classrow callback branch not patched')
+          s = s2
+          p.write_text(s)
+          PY
+
+      - name: Verify GREEN
+        shell: bash
+        run: |
+          cp Code.gs /tmp/Code.js
+          node --check /tmp/Code.js
+          node /tmp/test-class-identity.js
+          grep -q "function addStudentsBulk_" Code.gs
+          grep -q "function doPost" Code.gs
+
+      - name: Remove temporary workflow
+        shell: bash
+        run: rm -f .github/workflows/fix-student-class-identity.yml
+
+      - name: Commit fix
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Fix student class identity collisions"
+          git push

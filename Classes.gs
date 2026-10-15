@@ -8,6 +8,10 @@ function listActiveClasses_() {
   return listActiveRows_(SHEETS.CLASSES).sort((a,b) => String(a.class_name).localeCompare(String(b.class_name)));
 }
 
+function listAvailableClasses_() {
+  return listActiveClasses_().filter(row => !String(row.teacher_telegram_id || '').trim());
+}
+
 function addClass_(actor, className) {
   if (!canManageClasses_(actor)) throw new Error('Ruxsat yo‘q.');
   const name = normalizeName_(className);
@@ -33,6 +37,14 @@ function deactivateClass_(actor, classId) {
   if (!canManageClasses_(actor)) throw new Error('Ruxsat yo‘q.');
   const row = findRowByValue_(SHEETS.CLASSES, 'class_id', classId);
   if (!row || !(row.active === true || String(row.active).toLowerCase() === 'true')) throw new Error('Sinf topilmadi.');
+  const teacherId = String(row.teacher_telegram_id || '').trim();
+  if (teacherId) {
+    const teacher = findRowByValue_(SHEETS.USERS, 'telegram_id', teacherId);
+    if (teacher && teacher.role === ROLES.TEACHER && Number(teacher.class_id) === Number(classId)) {
+      updateObjectRow_(SHEETS.USERS, teacher._row, { active:false, class_id:'' });
+    }
+    updateObjectRow_(SHEETS.CLASSES, row._row, { teacher_telegram_id:'' });
+  }
   setRowActive_(SHEETS.CLASSES, 'class_id', classId, false);
   return true;
 }

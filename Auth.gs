@@ -12,8 +12,12 @@ function resolveActor_(telegramId) {
   const user = getRowsAsObjects_(SHEETS.USERS).find(row =>
     String(row.telegram_id) === id && (row.active === true || String(row.active).toLowerCase() === 'true')
   );
-  if (!user) return null;
-  if (user.role !== ROLES.ADMIN && user.role !== ROLES.TEACHER) return null;
+  if (!user) {
+    return { telegramId: id, role: ROLES.UNASSIGNED, classId: null, active: false };
+  }
+  if (user.role !== ROLES.ADMIN && user.role !== ROLES.TEACHER) {
+    return { telegramId: id, role: ROLES.UNASSIGNED, classId: null, active: false };
+  }
   return {
     telegramId: id,
     role: user.role,
@@ -28,6 +32,12 @@ function canManageClasses_(actor) {
 
 function canManageStudents_(actor) {
   return Boolean(actor && (actor.role === ROLES.SUPER_ADMIN || actor.role === ROLES.ADMIN));
+}
+
+function canManageStudentsInClass_(actor, classId) {
+  if (!actor) return false;
+  if (actor.role === ROLES.SUPER_ADMIN || actor.role === ROLES.ADMIN) return true;
+  return actor.role === ROLES.TEACHER && Number(actor.classId) === Number(classId);
 }
 
 function canManageUsers_(actor) {

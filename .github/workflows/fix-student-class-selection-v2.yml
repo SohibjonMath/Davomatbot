@@ -1,0 +1,90 @@
+name: Fix student class selection v2
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/fix-student-class-selection-v2.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Confirm RED
+        shell: bash
+        run: |
+          if grep -q "callback_data:'stu:classrow:' + row._row" Code.gs; then
+            echo 'Unexpectedly already fixed.'
+            exit 1
+          fi
+          echo 'RED confirmed.'
+
+      - name: Patch exact class routing
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          p = Path('Code.gs')
+          s = p.read_text()
+          pattern = r"function showStudentsClassChoice_\(chatId\) \{\n\s*sendMessage_\(chatId, 'Sinfni tanlang\.', classChoiceKeyboard_\('stu:class', false\)\);\n\}"
+          replacement = """function getClassBySheetRow_(rowNumber) {
+            const row = Number(rowNumber);
+            const sheet = getSheet_(SHEETS.CLASSES);
+            if (!Number.isInteger(row) || row < 2 || row > sheet.getLastRow()) throw new Error('Sinf topilmadi.');
+            const headers = getHeaders_(SHEETS.CLASSES);
+            const values = sheet.getRange(row, 1, 1, headers.length).getValues()[0];
+            const obj = { _row: row };
+            headers.forEach((header, index) => obj[header] = values[index]);
+            if (!(obj.active === true || String(obj.active).toLowerCase() === 'true')) throw new Error('Sinf topilmadi.');
+            return obj;
+          }
+
+          function showStudentsClassChoice_(chatId) {
+            const rows = listActiveClasses_().map(row => [{
+              text: String(row.class_name),
+              callback_data:'stu:classrow:' + row._row
+            }]);
+            sendMessage_(chatId, 'Sinfni tanlang.', buildInlineKeyboard_(rows));
+          }"""
+          s, count = re.subn(pattern, replacement, s, count=1)
+          if count != 1:
+            raise SystemExit(f'class choice replacement count={count}')
+          marker = "    } else if (p[0] === 'stu' && p[1] === 'class') {"
+          branch = """    } else if (p[0] === 'stu' && p[1] === 'classrow') {
+              const classRow = getClassBySheetRow_(p[2]);
+              showStudentsForClass_(chatId, actor, classIdKey_(classRow.class_id));
+          """
+          if marker not in s:
+            raise SystemExit('student class marker not found')
+          s = s.replace(marker, branch + marker, 1)
+          p.write_text(s)
+          PY
+
+      - name: Verify GREEN
+        shell: bash
+        run: |
+          cp Code.gs /tmp/Code.js
+          node --check /tmp/Code.js
+          grep -q "function getClassBySheetRow_(rowNumber)" Code.gs
+          grep -q "callback_data:'stu:classrow:' + row._row" Code.gs
+          grep -q "p\[1\] === 'classrow'" Code.gs
+          grep -q "showStudentsForClass_(chatId, actor, classIdKey_(classRow.class_id))" Code.gs
+
+      - name: Remove temporary workflows
+        shell: bash
+        run: rm -f .github/workflows/fix-student-class-selection.yml .github/workflows/fix-student-class-selection-v2.yml
+
+      - name: Commit fix
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Fix exact student class routing"
+          git push

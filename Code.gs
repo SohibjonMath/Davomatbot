@@ -744,8 +744,24 @@ function showClasses_(chatId) {
   sendMessage_(chatId, 'Sinflar', buildInlineKeyboard_(rows));
 }
 
+function getClassBySheetRow_(rowNumber) {
+  const row = Number(rowNumber);
+  const sheet = getSheet_(SHEETS.CLASSES);
+  if (!Number.isInteger(row) || row < 2 || row > sheet.getLastRow()) throw new Error('Sinf topilmadi.');
+  const headers = getHeaders_(SHEETS.CLASSES);
+  const values = sheet.getRange(row, 1, 1, headers.length).getValues()[0];
+  const obj = { _row: row };
+  headers.forEach((header, index) => obj[header] = values[index]);
+  if (!(obj.active === true || String(obj.active).toLowerCase() === 'true')) throw new Error('Sinf topilmadi.');
+  return obj;
+}
+
 function showStudentsClassChoice_(chatId) {
-  sendMessage_(chatId, 'Sinfni tanlang.', classChoiceKeyboard_('stu:class', false));
+  const rows = listActiveClasses_().map(row => [{
+    text: String(row.class_name),
+    callback_data:'stu:classrow:' + row._row
+  }]);
+  sendMessage_(chatId, 'Sinfni tanlang.', buildInlineKeyboard_(rows));
 }
 
 function showStudentsForClass_(chatId, actor, classId) {
@@ -922,6 +938,9 @@ function handleCallback_(callbackQuery, actor) {
     } else if (p[0] === 'cls' && p[1] === 'remove') {
       deactivateClass_(actor,p[2]);
       sendMessage_(chatId,'Sinf öçirildi.');
+    } else if (p[0] === 'stu' && p[1] === 'classrow') {
+    const classRow = getClassBySheetRow_(p[2]);
+    showStudentsForClass_(chatId, actor, classIdKey_(classRow.class_id));
     } else if (p[0] === 'stu' && p[1] === 'class') {
       showStudentsForClass_(chatId, actor, p[2]);
     } else if (p[0] === 'stu' && p[1] === 'add') {

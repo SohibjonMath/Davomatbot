@@ -14,7 +14,12 @@ const SHEET_HEADERS = Object.freeze({
   ATTENDANCE: ['date','class_id','student_id','status','updated_by','updated_at']
 });
 
-const ROLES = Object.freeze({ SUPER_ADMIN: 'SUPER_ADMIN', ADMIN: 'ADMIN', TEACHER: 'TEACHER' });
+const ROLES = Object.freeze({
+  SUPER_ADMIN: 'SUPER_ADMIN',
+  ADMIN: 'ADMIN',
+  TEACHER: 'TEACHER',
+  UNASSIGNED: 'UNASSIGNED'
+});
 const ATTENDANCE_STATUS = Object.freeze({ KELDI: 'KELDI', SABABLI: 'SABABLI', SABABSIZ: 'SABABSIZ' });
 const ATTENDANCE_CYCLE = Object.freeze(['KELDI','SABABLI','SABABSIZ']);
 const PROPERTY_KEYS = Object.freeze({

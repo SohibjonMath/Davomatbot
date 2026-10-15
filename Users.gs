@@ -27,46 +27,50 @@ function upsertUser_(telegramId, fullName, role, classId, active) {
   return findRowByValue_(SHEETS.USERS, 'telegram_id', telegramId);
 }
 
-function assignTeacher_(actor, classId, telegramId, fullName) {
-  if (!canManageUsers_(actor)) throw new Error('Ruxsat yo‘q.');
+function claimClass_(telegramId, fullName, classId) {
   const id = assertEditableUserId_(telegramId);
-  const classRow = findRowByValue_(SHEETS.CLASSES, 'class_id', classId);
-  if (!classRow || !(classRow.active === true || String(classRow.active).toLowerCase() === 'true')) throw new Error('Sinf topilmadi.');
-
-  const existingSameUser = findRowByValue_(SHEETS.USERS, 'telegram_id', id);
-  if (existingSameUser && existingSameUser.role === ROLES.TEACHER && existingSameUser.class_id !== '' && Number(existingSameUser.class_id) !== Number(classId)) {
-    const previousClass = findRowByValue_(SHEETS.CLASSES, 'class_id', existingSameUser.class_id);
-    if (previousClass && String(previousClass.teacher_telegram_id || '') === id) {
-      updateObjectRow_(SHEETS.CLASSES, previousClass._row, { teacher_telegram_id:'' });
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const existing = findRowByValue_(SHEETS.USERS, 'telegram_id', id);
+    if (existing && (existing.active === true || String(existing.active).toLowerCase() === 'true')) {
+      if (existing.role === ROLES.ADMIN) throw new Error('Admin sinf rahbari sifatida sinf tanlay olmaydi.');
+      if (existing.role === ROLES.TEACHER && existing.class_id !== '') {
+        if (Number(existing.class_id) === Number(classId)) {
+          const sameClass = findRowByValue_(SHEETS.CLASSES, 'class_id', classId);
+          return { classId:Number(classId), className:sameClass ? String(sameClass.class_name) : '', telegramId:id };
+        }
+        throw new Error('Siz allaqachon boshqa sinfni olgansiz.');
+      }
     }
-  }
 
-  const oldId = String(classRow.teacher_telegram_id || '').trim();
-  if (oldId && oldId !== id) {
-    const oldUser = findRowByValue_(SHEETS.USERS, 'telegram_id', oldId);
-    if (oldUser && oldUser.role === ROLES.TEACHER && Number(oldUser.class_id) === Number(classId)) {
-      updateObjectRow_(SHEETS.USERS, oldUser._row, { active:false, class_id:'' });
-    }
-  }
+    const classRow = findRowByValue_(SHEETS.CLASSES, 'class_id', classId);
+    if (!classRow || !(classRow.active === true || String(classRow.active).toLowerCase() === 'true')) throw new Error('Sinf topilmadi.');
+    if (String(classRow.teacher_telegram_id || '').trim()) throw new Error('Bu sinf band.');
 
-  upsertUser_(id, fullName, ROLES.TEACHER, classId, true);
-  updateObjectRow_(SHEETS.CLASSES, classRow._row, { teacher_telegram_id:id });
-  return { classId:Number(classId), telegramId:id, fullName:normalizeName_(fullName) };
+    upsertUser_(id, fullName, ROLES.TEACHER, classId, true);
+    updateObjectRow_(SHEETS.CLASSES, classRow._row, { teacher_telegram_id:id });
+    return { classId:Number(classId), className:String(classRow.class_name), telegramId:id };
+  } finally {
+    lock.releaseLock();
+  }
 }
 
-function removeTeacher_(actor, classId) {
-  if (!canManageUsers_(actor)) throw new Error('Ruxsat yo‘q.');
-  const classRow = findRowByValue_(SHEETS.CLASSES, 'class_id', classId);
-  if (!classRow) throw new Error('Sinf topilmadi.');
-  const oldId = String(classRow.teacher_telegram_id || '').trim();
-  if (oldId) {
-    const oldUser = findRowByValue_(SHEETS.USERS, 'telegram_id', oldId);
-    if (oldUser && oldUser.role === ROLES.TEACHER && Number(oldUser.class_id) === Number(classId)) {
-      updateObjectRow_(SHEETS.USERS, oldUser._row, { active:false, class_id:'' });
-    }
+function releaseOwnClass_(actor) {
+  if (!actor || actor.role !== ROLES.TEACHER || actor.classId === null || actor.classId === undefined) throw new Error('Sinf rahbari topilmadi.');
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const classRow = findRowByValue_(SHEETS.CLASSES, 'class_id', actor.classId);
+    if (!classRow) throw new Error('Sinf topilmadi.');
+    if (String(classRow.teacher_telegram_id || '') !== String(actor.telegramId)) throw new Error('Bu sinf sizga tegishli emas.');
+    updateObjectRow_(SHEETS.CLASSES, classRow._row, { teacher_telegram_id:'' });
+    const userRow = findRowByValue_(SHEETS.USERS, 'telegram_id', actor.telegramId);
+    if (userRow) updateObjectRow_(SHEETS.USERS, userRow._row, { active:false, class_id:'' });
+    return { classId:Number(actor.classId), className:String(classRow.class_name) };
+  } finally {
+    lock.releaseLock();
   }
-  updateObjectRow_(SHEETS.CLASSES, classRow._row, { teacher_telegram_id:'' });
-  return true;
 }
 
 function addAdmin_(actor, telegramId, fullName) {

@@ -611,7 +611,7 @@ function todayKey_() {
 }
 
 function safeOutput_() {
-  return ContentService.createTextOutput(JSON.stringify({ ok:true })).setMimeType(ContentService.MimeType.JSON);
+  return HtmlService.createHtmlOutput('OK');
 }
 
 function doPost(e) {

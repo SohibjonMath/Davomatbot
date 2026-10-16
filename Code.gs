@@ -1155,6 +1155,87 @@ function processNotifications_() {
   });
 }
 
+
+
+// ===== AcademicYearCalendarCore.gs =====
+
+function isActiveFlag_(value) {
+  return value === true || String(value).toLowerCase() === 'true';
+}
+
+function validateAcademicYearInputFromRows_(input, existingRows) {
+  const row = Object.assign({}, input || {});
+  row.year_id = String(row.year_id || '').trim();
+  row.title = String(row.title || '').trim();
+  row.start_date = String(row.start_date || '').slice(0, 10);
+  row.end_date = String(row.end_date || '').slice(0, 10);
+  row.promotion_date = String(row.promotion_date || '').slice(0, 10);
+  row.status = String(row.status || 'PLANNED').toUpperCase();
+  if (!row.year_id || !row.title) throw new Error('O‘quv yili nomi bo‘sh bo‘lishi mumkin emas.');
+  if (!validDateKey_(row.start_date) || !validDateKey_(row.end_date) || !validDateKey_(row.promotion_date)) throw new Error('O‘quv yili sanasi noto‘g‘ri.');
+  if (!(row.start_date <= row.end_date && row.end_date <= row.promotion_date)) throw new Error('O‘quv yili sana tartibi noto‘g‘ri.');
+  if (['PLANNED','ACTIVE','ARCHIVED'].indexOf(row.status) < 0) throw new Error('O‘quv yili holati noto‘g‘ri.');
+  const rows = existingRows || [];
+  if (rows.some(item => String(item.year_id) === row.year_id)) throw new Error('Bu o‘quv yili allaqachon mavjud.');
+  if (row.status === 'ACTIVE' && rows.some(item => String(item.status).toUpperCase() === 'ACTIVE')) throw new Error('Bitta ACTIVE o‘quv yili allaqachon mavjud.');
+  const overlap = rows.some(item => {
+    const a = String(item.start_date || '').slice(0,10), b = String(item.end_date || '').slice(0,10);
+    return validDateKey_(a) && validDateKey_(b) && row.start_date <= b && row.end_date >= a;
+  });
+  if (overlap) throw new Error('O‘quv yillari sana oralig‘i kesishmasligi kerak.');
+  return row;
+}
+
+function validateAcademicYearInput_(input) {
+  return validateAcademicYearInputFromRows_(input, getRowsAsObjects_(SHEETS.ACADEMIC_YEARS));
+}
+
+function findAcademicYearForDateFromRows_(years, dateKey) {
+  const key = String(dateKey || '').slice(0,10);
+  return (years || []).find(row => {
+    const start = String(row.start_date || '').slice(0,10);
+    const end = String(row.end_date || '').slice(0,10);
+    return validDateKey_(start) && validDateKey_(end) && key >= start && key <= end;
+  }) || null;
+}
+
+function resolveSchoolDayFromRows_(years, calendarRows, dateKey) {
+  const key = String(dateKey || '').slice(0,10);
+  if (!validDateKey_(key)) return false;
+  if (!findAcademicYearForDateFromRows_(years || [], key)) return false;
+  const events = (calendarRows || []).filter(row => isActiveFlag_(row.active) && key >= String(row.start_date || '').slice(0,10) && key <= String(row.end_date || '').slice(0,10));
+  if (events.some(row => String(row.type) === 'WORKDAY')) return true;
+  if (events.some(row => String(row.type) === 'VACATION' || String(row.type) === 'HOLIDAY')) return false;
+  const parts = key.split('-').map(Number);
+  const day = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2])).getUTCDay();
+  return day >= 1 && day <= 5;
+}
+
+function enumerateDateKeys_(startDate, endDate) {
+  const start = String(startDate || '').slice(0,10), end = String(endDate || '').slice(0,10);
+  if (!validDateKey_(start) || !validDateKey_(end) || start > end) throw new Error('Sana oralig‘i noto‘g‘ri.');
+  const out = [];
+  let current = start;
+  while (current <= end) { out.push(current); current = shiftDateKey_(current, 1); }
+  return out;
+}
+
+function enumerateSchoolDaysFromRows_(years, calendarRows, startDate, endDate) {
+  return enumerateDateKeys_(startDate, endDate).filter(date => resolveSchoolDayFromRows_(years, calendarRows, date));
+}
+
+function isSchoolDay_(dateKey) {
+  return resolveSchoolDayFromRows_(getRowsAsObjects_(SHEETS.ACADEMIC_YEARS), getRowsAsObjects_(SHEETS.CALENDAR), String(dateKey || '').slice(0,10));
+}
+
+function enumerateSchoolDays_(startDate, endDate) {
+  return enumerateSchoolDaysFromRows_(getRowsAsObjects_(SHEETS.ACADEMIC_YEARS), getRowsAsObjects_(SHEETS.CALENDAR), startDate, endDate);
+}
+
+function getActiveAcademicYear_() {
+  return getRowsAsObjects_(SHEETS.ACADEMIC_YEARS).find(row => String(row.status).toUpperCase() === 'ACTIVE') || null;
+}
+
 // ===== Telegram.gs =====
 
 function getTelegramToken_() {

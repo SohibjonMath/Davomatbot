@@ -392,6 +392,7 @@ function claimClass_(telegramId, fullName, classId) {
 
     upsertUser_(id, fullName, ROLES.TEACHER, classId, true);
     updateObjectRow_(SHEETS.CLASSES, classRow._row, { teacher_telegram_id:id });
+    syncCurrentClassHistoryTeacher_(classId, id);
     return { classId:classIdKey_(classId), className:String(classRow.class_name), telegramId:id };
   } finally {
     lock.releaseLock();
@@ -407,6 +408,7 @@ function releaseOwnClass_(actor) {
     if (!classRow) throw new Error('Sinf topilmadi.');
     if (String(classRow.teacher_telegram_id || '') !== String(actor.telegramId)) throw new Error('Bu sinf sizga tegishli emas.');
     updateObjectRow_(SHEETS.CLASSES, classRow._row, { teacher_telegram_id:'' });
+    syncCurrentClassHistoryTeacher_(actor.classId, '');
     const userRow = findRowByValue_(SHEETS.USERS, 'telegram_id', actor.telegramId);
     if (userRow) updateObjectRow_(SHEETS.USERS, userRow._row, { active:false, class_id:'' });
     return { classId:Number(actor.classId), className:String(classRow.class_name) };
@@ -1234,6 +1236,80 @@ function enumerateSchoolDays_(startDate, endDate) {
 
 function getActiveAcademicYear_() {
   return getRowsAsObjects_(SHEETS.ACADEMIC_YEARS).find(row => String(row.status).toUpperCase() === 'ACTIVE') || null;
+}
+
+
+
+// ===== AcademicYearSetupHistory.gs =====
+
+function createAcademicYear_(actor, input) {
+  if (!canManageClasses_(actor)) throw new Error('Ruxsat yo‘q.');
+  const clean = validateAcademicYearInput_(input);
+  appendObjectRow_(SHEETS.ACADEMIC_YEARS, {
+    year_id:clean.year_id, title:clean.title, start_date:clean.start_date, end_date:clean.end_date,
+    promotion_date:clean.promotion_date, status:clean.status, promoted_at:'', activated_at:''
+  });
+  return findRowByValue_(SHEETS.ACADEMIC_YEARS, 'year_id', clean.year_id);
+}
+
+function classHistoryParts_(className) {
+  const m = /^(\d+)-(.+)$/.exec(String(className || '').trim());
+  return m ? {grade:Number(m[1]), section:m[2]} : {grade:'', section:''};
+}
+
+function ensureClassHistorySnapshot_(classRow, academicYearRow) {
+  if (!classRow || !academicYearRow) throw new Error('Sinf yoki o‘quv yili topilmadi.');
+  const existing = getRowsAsObjects_(SHEETS.CLASS_HISTORY).find(row => sameClassId_(row.class_id, classRow.class_id) && String(row.academic_year_id) === String(academicYearRow.year_id));
+  if (existing) return existing;
+  const parts = classHistoryParts_(classRow.class_name);
+  appendObjectRow_(SHEETS.CLASS_HISTORY, {
+    class_id:classIdKey_(classRow.class_id), academic_year_id:String(academicYearRow.year_id), class_name:String(classRow.class_name),
+    grade:parts.grade, section:parts.section, teacher_telegram_id:String(classRow.teacher_telegram_id || ''),
+    active_from:String(academicYearRow.start_date), active_to:'', status:'ACTIVE'
+  });
+  return getRowsAsObjects_(SHEETS.CLASS_HISTORY).find(row => sameClassId_(row.class_id, classRow.class_id) && String(row.academic_year_id) === String(academicYearRow.year_id));
+}
+
+function backfillAttendanceAcademicYear_(academicYearRow) {
+  if (!academicYearRow) return 0;
+  let count = 0;
+  getRowsAsObjects_(SHEETS.ATTENDANCE).forEach(row => {
+    const date = statisticsDateKey_(row.date);
+    if (!String(row.academic_year_id || '').trim() && date >= String(academicYearRow.start_date) && date <= String(academicYearRow.end_date)) {
+      updateObjectRow_(SHEETS.ATTENDANCE, row._row, {academic_year_id:String(academicYearRow.year_id)});
+      count += 1;
+    }
+  });
+  return count;
+}
+
+function initializeCurrentAcademicYear_(actor, yearId) {
+  if (!actor || actor.role !== ROLES.SUPER_ADMIN) throw new Error('Ruxsat yo‘q.');
+  const row = findRowByValue_(SHEETS.ACADEMIC_YEARS, 'year_id', yearId);
+  if (!row) throw new Error('O‘quv yili topilmadi.');
+  const otherActive = getRowsAsObjects_(SHEETS.ACADEMIC_YEARS).find(item => String(item.status).toUpperCase() === 'ACTIVE' && String(item.year_id) !== String(yearId));
+  if (otherActive) throw new Error('Boshqa faol o‘quv yili mavjud.');
+  const today = todayKey_();
+  if (today >= String(row.start_date) && today <= String(row.end_date) && String(row.status).toUpperCase() !== 'ACTIVE') {
+    updateObjectRow_(SHEETS.ACADEMIC_YEARS, row._row, {status:'ACTIVE', activated_at:new Date().toISOString()});
+  }
+  const fresh = findRowByValue_(SHEETS.ACADEMIC_YEARS, 'year_id', yearId);
+  listActiveRows_(SHEETS.CLASSES).forEach(classRow => {
+    if (!String(classRow.start_year_id || '').trim()) updateObjectRow_(SHEETS.CLASSES, classRow._row, {start_year_id:String(yearId)});
+    const again = findRowByValue_(SHEETS.CLASSES, 'class_id', classRow.class_id) || classRow;
+    ensureClassHistorySnapshot_(again, fresh);
+  });
+  backfillAttendanceAcademicYear_(fresh);
+  return fresh;
+}
+
+function syncCurrentClassHistoryTeacher_(classId, teacherTelegramId) {
+  const year = getActiveAcademicYear_();
+  if (!year) return false;
+  const row = getRowsAsObjects_(SHEETS.CLASS_HISTORY).find(item => sameClassId_(item.class_id, classId) && String(item.academic_year_id) === String(year.year_id));
+  if (!row) return false;
+  updateObjectRow_(SHEETS.CLASS_HISTORY, row._row, {teacher_telegram_id:String(teacherTelegramId || '')});
+  return true;
 }
 
 // ===== Telegram.gs =====

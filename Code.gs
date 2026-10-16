@@ -1305,10 +1305,14 @@ function activatePlannedAcademicYears_(today) {
     if (activeNow && String(activeNow.year_id) !== String(year.year_id)) return;
     updateObjectRow_(SHEETS.ACADEMIC_YEARS, year._row, {status:'ACTIVE', activated_at:new Date().toISOString()});
     const freshYear = findRowByValue_(SHEETS.ACADEMIC_YEARS, 'year_id', year.year_id);
+
     getRowsAsObjects_(SHEETS.CLASSES).forEach(classRow => {
       if (String(classRow.start_year_id || '') !== String(year.year_id) || isActiveFlag_(classRow.active)) return;
       updateObjectRow_(SHEETS.CLASSES, classRow._row, {active:true});
-      ensureClassHistorySnapshot_(findRowByValue_(SHEETS.CLASSES,'class_id',classRow.class_id), freshYear);
+    });
+
+    listActiveRows_(SHEETS.CLASSES).forEach(classRow => {
+      ensureClassHistorySnapshot_(classRow, freshYear);
     });
     activated.push(String(year.year_id));
   });

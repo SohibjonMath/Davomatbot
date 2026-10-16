@@ -1387,6 +1387,87 @@ function processAcademicYearMaintenance_() {
   }
 }
 
+
+
+// ===== AcademicYearTelegramUI.gs =====
+
+function parseAcademicYearMessage_(text, status) {
+  const parts = String(text || '').split('|').map(x => x.trim());
+  if (parts.length !== 5) throw new Error('Format: 2026-2027 | 2026/2027 | 2026-09-02 | 2027-05-25 | 2027-06-01');
+  return {year_id:parts[0],title:parts[1],start_date:parts[2],end_date:parts[3],promotion_date:parts[4],status:status || 'PLANNED'};
+}
+
+function showAcademicYearMenu_(chatId, actor) {
+  if (!canManageClasses_(actor)) throw new Error('Ruxsat yo‘q.');
+  const rows = [[{text:'Joriy yil',callback_data:'academ:current'},{text:'Sinflar holati',callback_data:'academ:status'}],[{text:'Yangi yil tayyorlash',callback_data:'academ:new'},{text:'Yangi 5-sinf',callback_data:'academ:five'}],[{text:'Promotion sanasi',callback_data:'academ:promotion'},{text:'Arxiv',callback_data:'academ:archive'}]];
+  if (actor.role === ROLES.SUPER_ADMIN && !getActiveAcademicYear_()) rows.unshift([{text:'Joriy yilni boshlash',callback_data:'academ:init'}]);
+  sendMessage_(chatId,'O‘quv yili',buildInlineKeyboard_(rows));
+}
+
+function showCurrentAcademicYear_(chatId, actor) {
+  if (!canManageClasses_(actor)) throw new Error('Ruxsat yo‘q.');
+  const y=getActiveAcademicYear_();
+  if(!y) return sendMessage_(chatId,'Hozir faol o‘quv yili yo‘q.');
+  sendMessage_(chatId,String(y.title||y.year_id)+'\nBoshlanish: '+y.start_date+'\nTugash: '+y.end_date+'\nKeyingi bosqich sanasi: '+y.promotion_date);
+}
+
+function showAcademicClassStatus_(chatId, actor) {
+  if(!canManageClasses_(actor)) throw new Error('Ruxsat yo‘q.');
+  const lines=['Sinflar holati',''];
+  getRowsAsObjects_(SHEETS.CLASSES).forEach(c=>lines.push(String(c.class_name)+' — '+(isActiveFlag_(c.active)?'Faol':'Rejada/Arxiv')+(c.teacher_telegram_id?' — rahbar biriktirilgan':'')));
+  sendLongText_(chatId,lines.join('\n'));
+}
+
+function showAcademicYearArchive_(chatId, actor) {
+  if(!canManageClasses_(actor)) throw new Error('Ruxsat yo‘q.');
+  const years=getRowsAsObjects_(SHEETS.ACADEMIC_YEARS).filter(y=>String(y.status).toUpperCase()==='ARCHIVED');
+  if(!years.length) return sendMessage_(chatId,'Arxivlangan o‘quv yili yo‘q.');
+  sendMessage_(chatId,'Arxiv',buildInlineKeyboard_(years.map(y=>[{text:String(y.title||y.year_id),callback_data:'academ:archiveyear:'+y.year_id}])));
+}
+
+function showArchivedYear_(chatId, actor, yearId) {
+  if(!canManageClasses_(actor)) throw new Error('Ruxsat yo‘q.');
+  const year=findRowByValue_(SHEETS.ACADEMIC_YEARS,'year_id',yearId);
+  if(!year || String(year.status).toUpperCase()!=='ARCHIVED') throw new Error('Arxiv topilmadi.');
+  const history=getRowsAsObjects_(SHEETS.CLASS_HISTORY).filter(h=>String(h.academic_year_id)===String(yearId));
+  const lines=[String(year.title||year.year_id),''];
+  history.forEach(h=>{ const grads=getRowsAsObjects_(SHEETS.STUDENTS).filter(st=>sameClassId_(st.class_id,h.class_id)&&String(st.graduated_year_id||'')===String(yearId)); lines.push(String(h.class_name)+' — '+String(h.status)+(grads.length?' — '+grads.length+' bitiruvçi':'')); });
+  sendLongText_(chatId,lines.join('\n'));
+}
+
+function updatePromotionDate_(actor, yearId, dateKey) {
+  if(!canManageClasses_(actor)) throw new Error('Ruxsat yo‘q.');
+  if(!validDateKey_(dateKey)) throw new Error('Sana YYYY-MM-DD formatida bo‘lsin.');
+  const row=findRowByValue_(SHEETS.ACADEMIC_YEARS,'year_id',yearId);
+  if(!row) throw new Error('O‘quv yili topilmadi.');
+  if(String(row.promoted_at||'').trim() || String(row.status).toUpperCase()==='ARCHIVED') throw new Error('Yakunlangan o‘quv yilini o‘zgartirib bo‘lmaydi.');
+  if(String(dateKey)<String(row.end_date)) throw new Error('Keyingi bosqich sanasi o‘quv yili tugashidan oldin bo‘lishi mumkin emas.');
+  updateObjectRow_(SHEETS.ACADEMIC_YEARS,row._row,{promotion_date:String(dateKey)});
+  return true;
+}
+
+function createClassForAcademicYear_(actor, yearId, className) {
+  if(!canManageClasses_(actor)) throw new Error('Ruxsat yo‘q.');
+  const name=normalizeName_(className);
+  if(!/^5-\d+$/.test(name)) throw new Error('Yangi sinf nomi 5-01 kabi bo‘lsin.');
+  const year=findRowByValue_(SHEETS.ACADEMIC_YEARS,'year_id',yearId);
+  if(!year || ['ACTIVE','PLANNED'].indexOf(String(year.status).toUpperCase())<0) throw new Error('O‘quv yili topilmadi.');
+  const duplicate=getRowsAsObjects_(SHEETS.CLASSES).some(c=>String(c.class_name).toLowerCase()===name.toLowerCase() && !String(c.archived_at||''));
+  if(duplicate) throw new Error('Bunday sinf allaqachon mavjud.');
+  const classId=nextNumericId_(SHEETS.CLASSES,'class_id');
+  const isActive=String(year.status).toUpperCase()==='ACTIVE';
+  appendObjectRow_(SHEETS.CLASSES,{class_id:classId,class_name:name,teacher_telegram_id:'',active:isActive,start_year_id:String(yearId),archived_year_id:'',archived_at:''});
+  if(isActive) ensureClassHistorySnapshot_(findRowByValue_(SHEETS.CLASSES,'class_id',classId),year);
+  return {classId:classId,className:name,active:isActive};
+}
+
+function showFiveClassYearChoice_(chatId, actor) {
+  if(!canManageClasses_(actor)) throw new Error('Ruxsat yo‘q.');
+  const years=getRowsAsObjects_(SHEETS.ACADEMIC_YEARS).filter(y=>['ACTIVE','PLANNED'].indexOf(String(y.status).toUpperCase())>=0);
+  if(!years.length) return sendMessage_(chatId,'Avval o‘quv yilini yarating.');
+  sendMessage_(chatId,'Yangi 5-sinf qaysi o‘quv yiliga?',buildInlineKeyboard_(years.map(y=>[{text:String(y.title||y.year_id),callback_data:'academ:fiveyear:'+y.year_id}])));
+}
+
 // ===== Telegram.gs =====
 
 function getTelegramToken_() {
@@ -1438,9 +1519,9 @@ function answerCallback_(callbackQueryId, text) {
 function buildMainMenu_(actor) {
   let keyboard = [];
   if (actor.role === ROLES.SUPER_ADMIN) {
-    keyboard = [['Davomat','Statistika'],['Sinflar','Öquvçilar'],['Adminlar','Sozlamalar']];
+    keyboard = [['Davomat','Statistika'],['Sinflar','Öquvçilar'],['O‘quv yili','Taqvim'],['Adminlar','Sozlamalar']];
   } else if (actor.role === ROLES.ADMIN) {
-    keyboard = [['Davomat','Statistika'],['Sinflar','Öquvçilar'],['Sozlamalar']];
+    keyboard = [['Davomat','Statistika'],['Sinflar','Öquvçilar'],['O‘quv yili','Taqvim'],['Sozlamalar']];
   } else if (actor.role === ROLES.TEACHER) {
     keyboard = [['Bugungi davomat','Öquvçilar'],['Oldingi davomatlar','Sozlamalar']];
   } else if (actor.role === ROLES.UNASSIGNED) {
@@ -1761,7 +1842,17 @@ function handleText_(message, actor) {
         showStatisticsRangeDashboard_(chatId,actor);
         return;
       }
-      else if (pending.type === 'ADD_ADMIN') {
+      else if (pending.type === 'CREATE_ACADEMIC_YEAR') {
+        createAcademicYear_(actor, parseAcademicYearMessage_(text,'PLANNED'));
+      } else if (pending.type === 'INITIALIZE_ACADEMIC_YEAR') {
+        if (actor.role !== ROLES.SUPER_ADMIN) throw new Error('Ruxsat yo‘q.');
+        const created = createAcademicYear_(actor, parseAcademicYearMessage_(text,'PLANNED'));
+        initializeCurrentAcademicYear_(actor, created.year_id);
+      } else if (pending.type === 'EDIT_PROMOTION_DATE') {
+        updatePromotionDate_(actor,pending.yearId,text);
+      } else if (pending.type === 'ADD_FIVE_CLASS') {
+        createClassForAcademicYear_(actor,pending.yearId,text);
+      } else if (pending.type === 'ADD_ADMIN') {
         const parsed = parseTelegramPerson_(text);
         addAdmin_(actor, parsed.telegramId, parsed.fullName);
       } else throw new Error('Amal topilmadi.');
@@ -1804,6 +1895,16 @@ function handleText_(message, actor) {
   if (text === 'Statistika') {
     if (!canViewStatistics_(actor)) return sendMessage_(chatId,'Ruxsat yo‘q.');
     showStatisticsPeriodMenu_(chatId, actor);
+    return;
+  }
+  if (text === 'O‘quv yili') {
+    if (!canManageClasses_(actor)) return sendMessage_(chatId,'Ruxsat yo‘q.');
+    showAcademicYearMenu_(chatId,actor);
+    return;
+  }
+  if (text === 'Taqvim') {
+    if (!canManageClasses_(actor)) return sendMessage_(chatId,'Ruxsat yo‘q.');
+    showCalendarMenu_(chatId,actor);
     return;
   }
   if (text === 'Adminlar') {
@@ -1963,6 +2064,24 @@ function handleCallback_(callbackQuery, actor) {
     } else if (data === 'notify:time') {
       setPendingAction_(actor.telegramId,{type:'SET_NOTIFICATION_TIME'});
       sendMessage_(chatId,'Bildirişnoma vaqtini HH:MM formatida yuboring. Masalan: 08:30');
+    } else if (data === 'academ:current') {
+      showCurrentAcademicYear_(chatId,actor);
+    } else if (data === 'academ:status') {
+      showAcademicClassStatus_(chatId,actor);
+    } else if (data === 'academ:new') {
+      if(!canManageClasses_(actor)) throw new Error('Ruxsat yo‘q.'); setPendingAction_(actor.telegramId,{type:'CREATE_ACADEMIC_YEAR'}); sendMessage_(chatId,'Format: 2026-2027 | 2026/2027 | 2026-09-02 | 2027-05-25 | 2027-06-01');
+    } else if (data === 'academ:init') {
+      if(actor.role!==ROLES.SUPER_ADMIN) throw new Error('Ruxsat yo‘q.'); setPendingAction_(actor.telegramId,{type:'INITIALIZE_ACADEMIC_YEAR'}); sendMessage_(chatId,'Joriy o‘quv yilini yuboring: 2026-2027 | 2026/2027 | 2026-09-02 | 2027-05-25 | 2027-06-01');
+    } else if (data === 'academ:promotion') {
+      if(!canManageClasses_(actor)) throw new Error('Ruxsat yo‘q.'); const y=getActiveAcademicYear_(); if(!y) throw new Error('Faol o‘quv yili yo‘q.'); setPendingAction_(actor.telegramId,{type:'EDIT_PROMOTION_DATE',yearId:String(y.year_id)}); sendMessage_(chatId,'Yangi sanani YYYY-MM-DD formatida yuboring.');
+    } else if (data === 'academ:archive') {
+      showAcademicYearArchive_(chatId,actor);
+    } else if (p[0] === 'academ' && p[1] === 'archiveyear') {
+      showArchivedYear_(chatId,actor,p.slice(2).join(':'));
+    } else if (data === 'academ:five') {
+      showFiveClassYearChoice_(chatId,actor);
+    } else if (p[0] === 'academ' && p[1] === 'fiveyear') {
+      if(!canManageClasses_(actor)) throw new Error('Ruxsat yo‘q.'); setPendingAction_(actor.telegramId,{type:'ADD_FIVE_CLASS',yearId:p.slice(2).join(':')}); sendMessage_(chatId,'Yangi 5-sinf nomini yuboring. Masalan: 5-01');
     } else if (data === 'admin:add') {
       if (!canManageUsers_(actor)) throw new Error('Ruxsat yo‘q.');
       setPendingAction_(actor.telegramId,{type:'ADD_ADMIN'});

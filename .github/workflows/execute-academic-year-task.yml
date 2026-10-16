@@ -13,7 +13,7 @@ jobs:
         with:
           ref: feature/academic-year-calendar-archive-tdd
           fetch-depth: 0
-      - name: Task 7 red green
+      - name: Task 7 red green retry
         run: |
           set -e
           git config user.name "github-actions[bot]"

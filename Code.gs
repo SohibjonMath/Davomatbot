@@ -1468,6 +1468,49 @@ function showFiveClassYearChoice_(chatId, actor) {
   sendMessage_(chatId,'Yangi 5-sinf qaysi o‘quv yiliga?',buildInlineKeyboard_(years.map(y=>[{text:String(y.title||y.year_id),callback_data:'academ:fiveyear:'+y.year_id}])));
 }
 
+
+
+// ===== CalendarAdmin.gs =====
+
+function addCalendarEvent_(actor, input) {
+  if(!canManageClasses_(actor)) throw new Error('Ruxsat yo‘q.');
+  const type=String(input && input.type || '').toUpperCase();
+  const start=String(input && input.start_date || '').slice(0,10), end=String(input && input.end_date || '').slice(0,10), title=String(input && input.title || '').trim();
+  if(['VACATION','HOLIDAY','WORKDAY'].indexOf(type)<0) throw new Error('Taqvim turi noto‘g‘ri.');
+  if(!validDateKey_(start)||!validDateKey_(end)||start>end) throw new Error('Taqvim sanasi noto‘g‘ri.');
+  if(!title) throw new Error('Taqvim nomi bo‘sh bo‘lishi mumkin emas.');
+  const eventId=nextNumericId_(SHEETS.CALENDAR,'event_id');
+  appendObjectRow_(SHEETS.CALENDAR,{event_id:eventId,start_date:start,end_date:end,type:type,title:title,active:true,created_by:String(actor.telegramId),created_at:new Date().toISOString()});
+  return {eventId:eventId,startDate:start,endDate:end,type:type,title:title};
+}
+
+function deactivateCalendarEvent_(actor, eventId) {
+  if(!canManageClasses_(actor)) throw new Error('Ruxsat yo‘q.');
+  const row=findRowByValue_(SHEETS.CALENDAR,'event_id',eventId);
+  if(!row || !isActiveFlag_(row.active)) throw new Error('Taqvim yozuvi topilmadi.');
+  updateObjectRow_(SHEETS.CALENDAR,row._row,{active:false});
+  return true;
+}
+
+function parseCalendarEventMessage_(text, type) {
+  const parts=String(text||'').split('|').map(x=>x.trim());
+  if(parts.length!==3) throw new Error('Format: 2026-11-02 | 2026-11-08 | Kuzgi ta’til');
+  return {start_date:parts[0],end_date:parts[1],title:parts[2],type:type};
+}
+
+function showCalendarMenu_(chatId, actor) {
+  if(!canManageClasses_(actor)) throw new Error('Ruxsat yo‘q.');
+  sendMessage_(chatId,'Taqvim',buildInlineKeyboard_([[{text:'Ta’til qo‘shish',callback_data:'calendar:add:VACATION'}],[{text:'Dam olish/Bayram qo‘shish',callback_data:'calendar:add:HOLIDAY'}],[{text:'Ish kuni qo‘shish',callback_data:'calendar:add:WORKDAY'}],[{text:'Taqvimni ko‘rish',callback_data:'calendar:list'}]]));
+}
+
+function showCalendarEvents_(chatId, actor) {
+  if(!canManageClasses_(actor)) throw new Error('Ruxsat yo‘q.');
+  const events=listActiveRows_(SHEETS.CALENDAR).sort((a,b)=>String(a.start_date).localeCompare(String(b.start_date)));
+  if(!events.length) return sendMessage_(chatId,'Taqvimda maxsus kunlar yo‘q.');
+  const rows=events.map(e=>[{text:String(e.start_date)+(String(e.end_date)!==String(e.start_date)?' — '+e.end_date:'')+' | '+e.title,callback_data:'calendar:delete:'+e.event_id}]);
+  sendMessage_(chatId,'Taqvim yozuvlari. O‘chirish uchun yozuvni bosing.',buildInlineKeyboard_(rows));
+}
+
 // ===== Telegram.gs =====
 
 function getTelegramToken_() {
@@ -1852,6 +1895,8 @@ function handleText_(message, actor) {
         updatePromotionDate_(actor,pending.yearId,text);
       } else if (pending.type === 'ADD_FIVE_CLASS') {
         createClassForAcademicYear_(actor,pending.yearId,text);
+      } else if (pending.type === 'ADD_CALENDAR_EVENT') {
+        addCalendarEvent_(actor,parseCalendarEventMessage_(text,pending.calendarType));
       } else if (pending.type === 'ADD_ADMIN') {
         const parsed = parseTelegramPerson_(text);
         addAdmin_(actor, parsed.telegramId, parsed.fullName);
@@ -2082,6 +2127,15 @@ function handleCallback_(callbackQuery, actor) {
       showFiveClassYearChoice_(chatId,actor);
     } else if (p[0] === 'academ' && p[1] === 'fiveyear') {
       if(!canManageClasses_(actor)) throw new Error('Ruxsat yo‘q.'); setPendingAction_(actor.telegramId,{type:'ADD_FIVE_CLASS',yearId:p.slice(2).join(':')}); sendMessage_(chatId,'Yangi 5-sinf nomini yuboring. Masalan: 5-01');
+    } else if (p[0] === 'calendar' && p[1] === 'add') {
+      if(!canManageClasses_(actor)) throw new Error('Ruxsat yo‘q.');
+      if(['VACATION','HOLIDAY','WORKDAY'].indexOf(p[2])<0) throw new Error('Taqvim turi noto‘g‘ri.');
+      setPendingAction_(actor.telegramId,{type:'ADD_CALENDAR_EVENT',calendarType:p[2]});
+      sendMessage_(chatId,'Format: 2026-11-02 | 2026-11-08 | Nomi');
+    } else if (data === 'calendar:list') {
+      showCalendarEvents_(chatId,actor);
+    } else if (p[0] === 'calendar' && p[1] === 'delete') {
+      deactivateCalendarEvent_(actor,p[2]); sendMessage_(chatId,'Taqvim yozuvi o‘chirildi.');
     } else if (data === 'admin:add') {
       if (!canManageUsers_(actor)) throw new Error('Ruxsat yo‘q.');
       setPendingAction_(actor.telegramId,{type:'ADD_ADMIN'});

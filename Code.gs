@@ -8,15 +8,21 @@ const SHEETS = Object.freeze({
   STUDENTS: 'STUDENTS',
   USERS: 'USERS',
   ATTENDANCE: 'ATTENDANCE',
-  SETTINGS: 'SETTINGS'
+  SETTINGS: 'SETTINGS',
+  ACADEMIC_YEARS: 'ACADEMIC_YEARS',
+  CLASS_HISTORY: 'CLASS_HISTORY',
+  CALENDAR: 'CALENDAR'
 });
 
 const SHEET_HEADERS = Object.freeze({
-  CLASSES: ['class_id','class_name','teacher_telegram_id','active'],
-  STUDENTS: ['student_id','full_name','class_id','active'],
+  CLASSES: ['class_id','class_name','teacher_telegram_id','active','start_year_id','archived_year_id','archived_at'],
+  STUDENTS: ['student_id','full_name','class_id','active','graduated_year_id','graduated_at'],
   USERS: ['telegram_id','full_name','role','class_id','active'],
-  ATTENDANCE: ['date','class_id','student_id','status','updated_by','updated_at'],
-  SETTINGS: ['telegram_id','notifications_enabled','notification_time','last_notification_date']
+  ATTENDANCE: ['date','class_id','student_id','status','updated_by','updated_at','academic_year_id'],
+  SETTINGS: ['telegram_id','notifications_enabled','notification_time','last_notification_date'],
+  ACADEMIC_YEARS: ['year_id','title','start_date','end_date','promotion_date','status','promoted_at','activated_at'],
+  CLASS_HISTORY: ['class_id','academic_year_id','class_name','grade','section','teacher_telegram_id','active_from','active_to','status'],
+  CALENDAR: ['event_id','start_date','end_date','type','title','active','created_by','created_at']
 });
 
 const ROLES = Object.freeze({
@@ -106,6 +112,32 @@ function updateObjectRow_(sheetName, rowNumber, updates) {
 
 function listActiveRows_(sheetName) {
   return getRowsAsObjects_(sheetName).filter(row => row.active === true || String(row.active).toLowerCase() === 'true');
+}
+
+
+function mergeHeaders_(currentHeaders, expectedHeaders) {
+  const merged = (currentHeaders || []).slice();
+  (expectedHeaders || []).forEach(header => {
+    if (merged.indexOf(header) < 0) merged.push(header);
+  });
+  return merged;
+}
+
+function ensureSheetSchema_(sheetName, expectedHeaders) {
+  const ss = getSpreadsheet_();
+  let sheet = ss.getSheetByName(sheetName);
+  if (!sheet) sheet = ss.insertSheet(sheetName);
+  const expected = (expectedHeaders || []).slice();
+  if (sheet.getLastRow() === 0 || sheet.getLastColumn() === 0) {
+    if (expected.length) sheet.getRange(1, 1, 1, expected.length).setValues([expected]);
+    return expected;
+  }
+  const current = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(v => String(v || '').trim());
+  const merged = mergeHeaders_(current, expected);
+  if (merged.length > current.length) {
+    sheet.getRange(1, current.length + 1, 1, merged.length - current.length).setValues([merged.slice(current.length)]);
+  }
+  return merged;
 }
 
 
@@ -1199,19 +1231,7 @@ function statusLabel_(status) {
 // ===== Setup.gs =====
 
 function ensureSchema_() {
-  const ss = getSpreadsheet_();
-  Object.keys(SHEET_HEADERS).forEach(name => {
-    let sheet = ss.getSheetByName(name);
-    if (!sheet) sheet = ss.insertSheet(name);
-    const expected = SHEET_HEADERS[name];
-    if (sheet.getLastRow() === 0) {
-      sheet.getRange(1, 1, 1, expected.length).setValues([expected]);
-      return;
-    }
-    const current = sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), expected.length)).getValues()[0].slice(0, expected.length);
-    const matches = expected.every((header, i) => current[i] === header);
-    if (!matches) throw new Error(name + ' sarlavhalari noto‘g‘ri.');
-  });
+  Object.keys(SHEET_HEADERS).forEach(name => ensureSheetSchema_(name, SHEET_HEADERS[name]));
   return true;
 }
 

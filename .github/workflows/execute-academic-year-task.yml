@@ -1,4 +1,4 @@
-name: Execute academic year task
+name: Final academic year verification
 on:
   push:
     branches: [feature/academic-year-calendar-archive-tdd]
@@ -6,25 +6,34 @@ on:
 permissions:
   contents: write
 jobs:
-  run:
+  verify:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           ref: feature/academic-year-calendar-archive-tdd
           fetch-depth: 0
-      - name: Fix review regressions and verify all suites
+      - name: Clean temporary implementation files and verify final tree
         run: |
-          set -e
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          python tools/fix-review-regressions.py
+          rm -f tools/apply-academic-year-upgrade.py tools/repair-task6.py tools/repair-task7.py tools/fix-activation-history.py tools/fix-review-regressions.py
+          rm -f .github/workflows/execute-academic-year-task.yml
           node tests/review-regressions.test.js
           node tests/activation-history-regression.test.js
           node tests/academic-year-calendar.test.js
           cp Code.gs /tmp/Code.js
           node --check /tmp/Code.js
-          node -e "const x=require('./appsscript.json'); if(x.timeZone!=='Asia/Tashkent') process.exit(1)"
-          git add Code.gs tests/review-regressions.test.js
-          git commit -m "fix: harden multi year attendance lifecycle"
+          node -e "const x=require('./appsscript.json'); if(x.timeZone!=='Asia/Tashkent') process.exit(1); console.log('timezone OK')"
+          test ! -e tools/apply-academic-year-upgrade.py
+          test ! -e tools/repair-task6.py
+          test ! -e tools/repair-task7.py
+          test ! -e tools/fix-activation-history.py
+          test ! -e tools/fix-review-regressions.py
+          test ! -e .github/workflows/execute-academic-year-task.yml
+          echo 'FINAL_TREE_FILES'
+          find . -maxdepth 3 -type f -not -path './.git/*' | sort
+          git add -A
+          git commit -m "chore: remove temporary implementation helpers"
           git push origin HEAD:feature/academic-year-calendar-archive-tdd

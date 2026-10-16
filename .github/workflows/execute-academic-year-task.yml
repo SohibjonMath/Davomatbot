@@ -13,16 +13,16 @@ jobs:
         with:
           ref: feature/academic-year-calendar-archive-tdd
           fetch-depth: 0
-      - name: Task 3 red green
+      - name: Task 4 red green
         run: |
           set -e
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if node tests/academic-year-calendar.test.js setup; then exit 1; else echo RED_OK; fi
-          python tools/apply-academic-year-upgrade.py 3
-          node tests/academic-year-calendar.test.js setup
+          if node tests/academic-year-calendar.test.js lifecycle; then exit 1; else echo RED_OK; fi
+          python tools/apply-academic-year-upgrade.py 4
+          node tests/academic-year-calendar.test.js lifecycle
           cp Code.gs /tmp/Code.js
           node --check /tmp/Code.js
           git add Code.gs
-          git commit -m "feat: initialize academic year history"
+          git commit -m "feat: add class promotion and graduation lifecycle"
           git push origin HEAD:feature/academic-year-calendar-archive-tdd

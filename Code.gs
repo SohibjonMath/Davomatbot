@@ -1511,6 +1511,17 @@ function showCalendarEvents_(chatId, actor) {
   sendMessage_(chatId,'Taqvim yozuvlari. O‘chirish uchun yozuvni bosing.',buildInlineKeyboard_(rows));
 }
 
+
+
+// ===== UnifiedTriggers.gs =====
+
+function installDavomatTriggers() {
+  const existing = ScriptApp.getProjectTriggers().map(trigger => trigger.getHandlerFunction());
+  if (existing.indexOf('processNotifications_') < 0) ScriptApp.newTrigger('processNotifications_').timeBased().everyMinutes(5).create();
+  if (existing.indexOf('processAcademicYearMaintenance_') < 0) ScriptApp.newTrigger('processAcademicYearMaintenance_').timeBased().everyDays(1).atHour(3).create();
+  return true;
+}
+
 // ===== Telegram.gs =====
 
 function getTelegramToken_() {
@@ -1607,8 +1618,7 @@ function setupDavomatOne() {
 }
 
 function installNotificationTrigger() {
-  ensureSchema_();
-  return ensureNotificationTrigger_();
+  return installDavomatTriggers();
 }
 
 function installTelegramWebhook() {

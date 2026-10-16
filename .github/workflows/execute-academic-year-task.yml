@@ -13,12 +13,16 @@ jobs:
         with:
           ref: feature/academic-year-calendar-archive-tdd
           fetch-depth: 0
-      - name: Confirm activation-history regression RED
+      - name: Fix activation-history regression and verify full suite
         run: |
           set -e
-          if node tests/activation-history-regression.test.js; then
-            echo 'Regression test unexpectedly passed before fix'
-            exit 1
-          else
-            echo 'RED_OK: continuing class lacks new-year snapshot before fix'
-          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          python tools/fix-activation-history.py
+          node tests/activation-history-regression.test.js
+          node tests/academic-year-calendar.test.js
+          cp Code.gs /tmp/Code.js
+          node --check /tmp/Code.js
+          git add Code.gs tests/activation-history-regression.test.js
+          git commit -m "fix: snapshot continuing classes on year activation"
+          git push origin HEAD:feature/academic-year-calendar-archive-tdd

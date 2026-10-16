@@ -1312,6 +1312,113 @@ function syncCurrentClassHistoryTeacher_(classId, teacherTelegramId) {
   return true;
 }
 
+
+
+// ===== AcademicYearLifecycle.gs =====
+
+function parseClassStage_(className) {
+  const m = /^([5-9]|10|11)-(\d+)$/.exec(String(className || '').trim());
+  return m ? {grade:Number(m[1]), section:m[2]} : null;
+}
+
+function nextClassName_(className) {
+  const parsed = parseClassStage_(className);
+  if (!parsed || parsed.grade === 11) return null;
+  return String(parsed.grade + 1) + '-' + parsed.section;
+}
+
+function activatePlannedAcademicYears_(today) {
+  const key = String(today || todayKey_()).slice(0,10);
+  const activated = [];
+  const activeNow = getActiveAcademicYear_();
+  getRowsAsObjects_(SHEETS.ACADEMIC_YEARS).forEach(year => {
+    if (String(year.status).toUpperCase() !== 'PLANNED') return;
+    if (key < String(year.start_date) || key > String(year.end_date)) return;
+    if (activeNow && String(activeNow.year_id) !== String(year.year_id)) return;
+    updateObjectRow_(SHEETS.ACADEMIC_YEARS, year._row, {status:'ACTIVE', activated_at:new Date().toISOString()});
+    const freshYear = findRowByValue_(SHEETS.ACADEMIC_YEARS, 'year_id', year.year_id);
+    getRowsAsObjects_(SHEETS.CLASSES).forEach(classRow => {
+      if (String(classRow.start_year_id || '') !== String(year.year_id) || isActiveFlag_(classRow.active)) return;
+      updateObjectRow_(SHEETS.CLASSES, classRow._row, {active:true});
+      ensureClassHistorySnapshot_(findRowByValue_(SHEETS.CLASSES,'class_id',classRow.class_id), freshYear);
+    });
+    activated.push(String(year.year_id));
+  });
+  return activated;
+}
+
+function promoteAcademicYear_(academicYearRow, today) {
+  const result = {yearId:academicYearRow ? String(academicYearRow.year_id) : '', promotedCount:0, graduatedClasses:[], graduatedStudents:0, invalidClasses:[]};
+  if (!academicYearRow || String(academicYearRow.status).toUpperCase() !== 'ACTIVE' || String(academicYearRow.promoted_at || '').trim()) return result;
+  const key = String(today || todayKey_()).slice(0,10);
+  if (key < String(academicYearRow.promotion_date)) return result;
+  const yearId = String(academicYearRow.year_id);
+  listActiveRows_(SHEETS.CLASSES).forEach(classRow => {
+    const history = getRowsAsObjects_(SHEETS.CLASS_HISTORY).find(row => sameClassId_(row.class_id,classRow.class_id) && String(row.academic_year_id) === yearId);
+    if (history && String(history.status).toUpperCase() !== 'ACTIVE') return;
+    const parsed = parseClassStage_(classRow.class_name);
+    if (!parsed) { result.invalidClasses.push(String(classRow.class_name || classRow.class_id)); return; }
+    const historyRow = history || ensureClassHistorySnapshot_(classRow, academicYearRow);
+    if (parsed.grade === 11) {
+      updateObjectRow_(SHEETS.CLASS_HISTORY, historyRow._row, {status:'GRADUATED', active_to:key});
+      updateObjectRow_(SHEETS.CLASSES, classRow._row, {active:false, archived_year_id:yearId, archived_at:new Date().toISOString(), teacher_telegram_id:''});
+      getRowsAsObjects_(SHEETS.STUDENTS).filter(st => sameClassId_(st.class_id,classRow.class_id) && isActiveFlag_(st.active)).forEach(st => {
+        updateObjectRow_(SHEETS.STUDENTS, st._row, {active:false, graduated_year_id:yearId, graduated_at:new Date().toISOString()});
+        result.graduatedStudents += 1;
+      });
+      const teacherId = String(classRow.teacher_telegram_id || '').trim();
+      if (teacherId) {
+        const teacher = findRowByValue_(SHEETS.USERS,'telegram_id',teacherId);
+        if (teacher && teacher.role === ROLES.TEACHER && sameClassId_(teacher.class_id,classRow.class_id)) updateObjectRow_(SHEETS.USERS, teacher._row, {active:false,class_id:''});
+      }
+      result.graduatedClasses.push(String(classRow.class_name));
+    } else {
+      const next = nextClassName_(classRow.class_name);
+      updateObjectRow_(SHEETS.CLASS_HISTORY, historyRow._row, {status:'PROMOTED', active_to:key});
+      updateObjectRow_(SHEETS.CLASSES, classRow._row, {class_name:next});
+      result.promotedCount += 1;
+    }
+  });
+  updateObjectRow_(SHEETS.ACADEMIC_YEARS, academicYearRow._row, {status:'ARCHIVED', promoted_at:new Date().toISOString()});
+  return result;
+}
+
+function buildPromotionReport_(result) {
+  const lines = ['O‘quv yili yakunlandi: ' + result.yearId, 'Keyingi bosqichga o‘tdi: ' + result.promotedCount, 'Bitirgan sinflar: ' + result.graduatedClasses.length, 'Bitirgan öquvçilar: ' + result.graduatedStudents];
+  if (result.graduatedClasses.length) lines.push('Bitirganlar: ' + result.graduatedClasses.join(', '));
+  if (result.invalidClasses.length) lines.push('Tekşirish kerak: ' + result.invalidClasses.join(', '));
+  return lines.join('\n');
+}
+
+function notifyAdminsAcademicYearReport_(result) {
+  if (!result || (!result.promotedCount && !result.graduatedClasses.length && !result.invalidClasses.length)) return false;
+  const ids = {};
+  const superId = getSuperAdminId_();
+  if (superId) ids[String(superId)] = true;
+  listActiveRows_(SHEETS.USERS).filter(row => row.role === ROLES.ADMIN).forEach(row => ids[String(row.telegram_id)] = true);
+  const text = buildPromotionReport_(result);
+  Object.keys(ids).forEach(id => { try { sendMessage_(id, text); } catch (error) { console.error('Admin xabari yuborilmadi:', error && error.message ? error.message : error); } });
+  return true;
+}
+
+function processAcademicYearMaintenance_() {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    const today = todayKey_();
+    const activated = activatePlannedAcademicYears_(today);
+    const activeYear = getActiveAcademicYear_();
+    let promotion = null;
+    if (activeYear && !String(activeYear.promoted_at || '').trim() && today >= String(activeYear.promotion_date)) {
+      promotion = promoteAcademicYear_(activeYear, today);
+      notifyAdminsAcademicYearReport_(promotion);
+    }
+    return {activated:activated, promotion:promotion};
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 // ===== Telegram.gs =====
 
 function getTelegramToken_() {

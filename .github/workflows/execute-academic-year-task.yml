@@ -20,6 +20,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           if node tests/academic-year-calendar.test.js academic-ui; then exit 1; else echo RED_OK; fi
           python tools/apply-academic-year-upgrade.py 6
+          python tools/repair-task6.py
           node tests/academic-year-calendar.test.js academic-ui
           cp Code.gs /tmp/Code.js
           node --check /tmp/Code.js

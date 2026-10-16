@@ -918,7 +918,7 @@ function buildStatisticsRangeModelFromRows_(classes, students, attendanceRows, u
       classStudents.forEach(st => names[String(st.student_id)] = String(st.full_name || ''));
       rows.forEach(row => { if (row.status===ATTENDANCE_STATUS.KELDI) keldi++; else if (row.status===ATTENDANCE_STATUS.SABABLI || row.status===ATTENDANCE_STATUS.SABABSIZ) { if(row.status===ATTENDANCE_STATUS.SABABLI)sababli++;else sababsiz++; const id=String(row.student_id); if(!absenceMap[id]) absenceMap[id]={studentId:id,studentName:names[id]||('ID '+id),sababli:0,sababsiz:0,total:0}; absenceMap[id][row.status===ATTENDANCE_STATUS.SABABLI?'sababli':'sababsiz']++; absenceMap[id].total++; }});
       const teacherId=String(classRow.teacher_telegram_id||'');
-      return {sheetRow:Number(classRow._row)||0,classId:classId,className:String(classRow.class_name||classId),teacherName:teacherId?statisticsPersonName_(users,superAdminId,teacherId):'Rahbar tanlanmagan',totalStudents:classStudents.length,submittedDays:submitted.length,missingDays:Math.max(0,activeDates.length-submitted.length),keldi:keldi,sababli:sababli,sababsiz:sababsiz,absences:Object.keys(absenceMap).map(k=>absenceMap[k])};
+      return {sheetRow:Number(classRow._row)||0,classId:classId,className:String(classRow.class_name||classId),teacherName:teacherId?statisticsPersonName_(users,superAdminId,teacherId):'Rahbar tanlanmagan',totalStudents:classStudents.length,schoolDays:activeDates.length,submittedDays:submitted.length,missingDays:Math.max(0,activeDates.length-submitted.length),keldi:keldi,sababli:sababli,sababsiz:sababsiz,absences:Object.keys(absenceMap).map(k=>absenceMap[k])};
     });
     const top=[]; legacyClasses.forEach(c=>c.absences.forEach(a=>top.push(Object.assign({classId:c.classId,className:c.className},a)))); top.sort((a,b)=>b.total-a.total);
     return {start:startDate,end:endDate,schoolDays:activeDates.length,totalClasses:legacyClasses.length,totalStudents:legacyClasses.reduce((n,c)=>n+c.totalStudents,0),keldi:legacyClasses.reduce((n,c)=>n+c.keldi,0),sababli:legacyClasses.reduce((n,c)=>n+c.sababli,0),sababsiz:legacyClasses.reduce((n,c)=>n+c.sababsiz,0),classes:legacyClasses,topAbsences:top,days:[]};
@@ -943,7 +943,7 @@ function buildStatisticsRangeModelFromRows_(classes, students, attendanceRows, u
     let keldi=0,sababli=0,sababsiz=0; const map={};
     rows.forEach(row=>{ if(row.status===ATTENDANCE_STATUS.KELDI)keldi++; else if(row.status===ATTENDANCE_STATUS.SABABLI||row.status===ATTENDANCE_STATUS.SABABSIZ){ if(row.status===ATTENDANCE_STATUS.SABABLI)sababli++;else sababsiz++; const id=String(row.student_id); if(!map[id])map[id]={studentId:id,studentName:names[id]||('ID '+id),sababli:0,sababsiz:0,total:0}; map[id][row.status===ATTENDANCE_STATUS.SABABLI?'sababli':'sababsiz']++; map[id].total++; }});
     const teacherId=String(h.teacher_telegram_id||'');
-    return {sheetRow:Number(h._row)||0,classId:classId,academicYearId:String(snapshot.year.year_id),className:String(h.class_name||classId),teacherName:teacherId?statisticsPersonName_(users,superAdminId,teacherId):'Rahbar tanlanmagan',totalStudents:classStudents.length,submittedDays:submitted.length,missingDays:Math.max(0,dateSet.length-submitted.length),keldi:keldi,sababli:sababli,sababsiz:sababsiz,absences:Object.keys(map).map(k=>map[k]).sort((a,b)=>b.total-a.total)};
+    return {sheetRow:Number(h._row)||0,classId:classId,academicYearId:String(snapshot.year.year_id),className:String(h.class_name||classId),teacherName:teacherId?statisticsPersonName_(users,superAdminId,teacherId):'Rahbar tanlanmagan',totalStudents:classStudents.length,schoolDays:dateSet.length,submittedDays:submitted.length,missingDays:Math.max(0,dateSet.length-submitted.length),keldi:keldi,sababli:sababli,sababsiz:sababsiz,absences:Object.keys(map).map(k=>map[k]).sort((a,b)=>b.total-a.total)};
   }).sort((a,b)=>a.academicYearId.localeCompare(b.academicYearId)||a.className.localeCompare(b.className));
   const top=[]; classStats.forEach(c=>c.absences.forEach(a=>top.push(Object.assign({classId:c.classId,className:c.className,academicYearId:c.academicYearId},a)))); top.sort((a,b)=>b.total-a.total||a.studentName.localeCompare(b.studentName));
   const days=schoolDates.map(date=>{ const yearId=yearForDate[date]; const hs=snapshots.filter(s=>String(s.year.year_id)===yearId).map(s=>s.history); const submissions=[],missing=[]; hs.forEach(h=>{ const rows=(attendanceRows||[]).filter(r=>statisticsDateKey_(r.date)===date&&sameClassId_(r.class_id,h.class_id)); if(!rows.length){missing.push({classId:classIdKey_(h.class_id),className:String(h.class_name),teacherName:String(h.teacher_telegram_id||'')?statisticsPersonName_(users,superAdminId,h.teacher_telegram_id):'Rahbar tanlanmagan'});return;} let latest=rows[0]; rows.forEach(r=>{if(String(r.updated_at||'')>String(latest.updated_at||''))latest=r;}); submissions.push({classId:classIdKey_(h.class_id),className:String(h.class_name),submittedByName:statisticsPersonName_(users,superAdminId,latest.updated_by),submittedAt:String(latest.updated_at||'')}); }); return {date:date,academicYearId:yearId,submissions:submissions,missing:missing}; });
@@ -993,7 +993,7 @@ function showStatisticsRangeDashboard_(chatId, actor) {
 function showRangeClasses_(chatId, actor) {
   const model = getStatisticsRangeModel_(actor);
   const lines = ['Sinflar kesimi — ' + model.start + ' — ' + model.end,''];
-  model.classes.forEach((item,index) => lines.push((index+1) + '. ' + item.className + ' — ' + item.teacherName + '\nDavomat: ' + item.submittedDays + '/' + model.schoolDays + ' kun | Keldi ' + item.keldi + ' | Sababli ' + item.sababli + ' | Sababsiz ' + item.sababsiz));
+  model.classes.forEach((item,index) => lines.push((index+1) + '. ' + item.className + ' — ' + item.teacherName + '\nDavomat: ' + item.submittedDays + '/' + (item.schoolDays || model.schoolDays) + ' kun | Keldi ' + item.keldi + ' | Sababli ' + item.sababli + ' | Sababsiz ' + item.sababsiz));
   if (!model.classes.length) lines.push('Sinf topilmadi.');
   sendLongText_(chatId,lines.join('\n'),rangeBackKeyboard_());
 }
@@ -1285,7 +1285,7 @@ function syncCurrentClassHistoryTeacher_(classId, teacherTelegramId) {
 // ===== AcademicYearLifecycle.gs =====
 
 function parseClassStage_(className) {
-  const m = /^([5-9]|10|11)-(\d+)$/.exec(String(className || '').trim());
+  const m = /^(0?[5-9]|10|11)-(\d+)$/.exec(String(className || '').trim());
   return m ? {grade:Number(m[1]), section:m[2]} : null;
 }
 
@@ -1456,7 +1456,12 @@ function createClassForAcademicYear_(actor, yearId, className) {
   if(!/^5-\d+$/.test(name)) throw new Error('Yangi sinf nomi 5-01 kabi bo‘lsin.');
   const year=findRowByValue_(SHEETS.ACADEMIC_YEARS,'year_id',yearId);
   if(!year || ['ACTIVE','PLANNED'].indexOf(String(year.status).toUpperCase())<0) throw new Error('O‘quv yili topilmadi.');
-  const duplicate=getRowsAsObjects_(SHEETS.CLASSES).some(c=>String(c.class_name).toLowerCase()===name.toLowerCase() && !String(c.archived_at||''));
+  const yearStatus=String(year.status).toUpperCase();
+  const duplicate=getRowsAsObjects_(SHEETS.CLASSES).some(c=>{
+    if(String(c.class_name).toLowerCase()!==name.toLowerCase() || String(c.archived_at||'')) return false;
+    if(yearStatus==='PLANNED') return String(c.start_year_id||'')===String(yearId);
+    return isActiveFlag_(c.active);
+  });
   if(duplicate) throw new Error('Bunday sinf allaqachon mavjud.');
   const classId=nextNumericId_(SHEETS.CLASSES,'class_id');
   const isActive=String(year.status).toUpperCase()==='ACTIVE';
@@ -1732,7 +1737,12 @@ function classChoiceKeyboard_(prefix, includeHistory) {
 }
 
 function showAttendanceForClass_(chatId, messageId, actor, classId, date, edit) {
-  const view = buildAttendanceView_(actor, classId, date || todayKey_());
+  const dateKey = normalizeDateKey_(date || todayKey_());
+  if (dateKey === todayKey_() && !isSchoolDay_(dateKey)) {
+    sendMessage_(chatId, 'Bugun o‘qish kuni emas.');
+    return;
+  }
+  const view = buildAttendanceView_(actor, classId, dateKey);
   if (edit && messageId) editMessage_(chatId, messageId, view.text, view.replyMarkup);
   else sendMessage_(chatId, view.text, view.replyMarkup);
 }

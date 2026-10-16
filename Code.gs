@@ -475,30 +475,26 @@ function cycleAttendanceStatus_(status) {
 function saveAttendance_(actor, classId, date, entries) {
   if (!canAccessClass_(actor, classId)) throw new Error('Ruxsat yo‘q.');
   const classRow = findRowByValue_(SHEETS.CLASSES, 'class_id', classId);
-  if (!classRow || !(classRow.active === true || String(classRow.active).toLowerCase() === 'true')) throw new Error('Sinf topilmadi.');
+  if (!classRow || !isActiveFlag_(classRow.active)) throw new Error('Sinf topilmadi.');
   const dateKey = normalizeDateKey_(date);
-  const activeStudents = listActiveRows_(SHEETS.STUDENTS).filter(row => sameClassId_(row.class_id, classId));
-  const allowed = new Set(activeStudents.map(row => String(row.student_id)));
-  const input = new Map((entries || []).map(entry => [String(entry.studentId), entry.status]));
-  const sheet = getSheet_(SHEETS.ATTENDANCE);
+  if (!isSchoolDay_(dateKey)) throw new Error('Bu sana o‘qish kuni emas.');
+  const year = findAcademicYearForDateFromRows_(getRowsAsObjects_(SHEETS.ACADEMIC_YEARS), dateKey);
+  if (!year || String(year.status).toUpperCase() !== 'ACTIVE') throw new Error('Bu o‘quv yili faollashtirilmagan.');
+  const students = listActiveRows_(SHEETS.STUDENTS).filter(row => sameClassId_(row.class_id, classId));
+  const byId = {};
+  (entries || []).forEach(entry => { byId[String(entry.studentId)] = entry; });
   const existing = getRowsAsObjects_(SHEETS.ATTENDANCE);
-  const now = new Date().toISOString();
-  const savedEntries = [];
-
-  activeStudents.forEach(student => {
-    const sid = String(student.student_id);
-    if (!allowed.has(sid)) return;
-    const status = input.has(sid) ? input.get(sid) : ATTENDANCE_STATUS.KELDI;
-    if (ATTENDANCE_CYCLE.indexOf(status) < 0) throw new Error('Davomat holati noto‘g‘ri.');
-    const match = existing.find(row => String(row.date) === dateKey && sameClassId_(row.class_id, classId) && String(row.student_id) === sid);
-    if (match) {
-      updateObjectRow_(SHEETS.ATTENDANCE, match._row, { status, updated_by: String(actor.telegramId), updated_at: now });
-    } else {
-      sheet.appendRow([dateKey, classIdKey_(classId), Number(student.student_id), status, String(actor.telegramId), now]);
-    }
-    savedEntries.push({ studentId:Number(student.student_id), fullName:String(student.full_name), status });
+  const saved = [];
+  students.forEach(student => {
+    const entry = byId[String(student.student_id)];
+    const status = entry && ATTENDANCE_CYCLE.indexOf(entry.status) >= 0 ? entry.status : ATTENDANCE_STATUS.KELDI;
+    const row = existing.find(item => statisticsDateKey_(item.date) === dateKey && sameClassId_(item.class_id,classId) && String(item.student_id) === String(student.student_id));
+    const data = {status:status, updated_by:String(actor.telegramId), updated_at:new Date().toISOString(), academic_year_id:String(year.year_id)};
+    if (row) updateObjectRow_(SHEETS.ATTENDANCE,row._row,data);
+    else appendObjectRow_(SHEETS.ATTENDANCE,{date:dateKey,class_id:classIdKey_(classId),student_id:student.student_id,status:status,updated_by:String(actor.telegramId),updated_at:data.updated_at,academic_year_id:String(year.year_id)});
+    saved.push({studentId:Number(student.student_id),fullName:String(student.full_name),status:status});
   });
-  return savedEntries;
+  return saved;
 }
 
 function attendanceSummary_(entries) {
@@ -909,84 +905,59 @@ function presetStatisticsRange_(preset) {
   return {start:today,end:today};
 }
 
-function buildStatisticsRangeModelFromRows_(classes, students, attendanceRows, users, superAdminId, startDate, endDate) {
-  const activeClasses = (classes || []).filter(row => statisticsActive_(row.active));
-  const activeStudents = (students || []).filter(row => statisticsActive_(row.active));
-  const rangeRows = (attendanceRows || []).filter(row => {
-    const d = statisticsDateKey_(row.date);
-    return d >= startDate && d <= endDate;
-  });
-  const activeDateMap = {};
-  rangeRows.forEach(row => { activeDateMap[statisticsDateKey_(row.date)] = true; });
-  const activeDates = Object.keys(activeDateMap).sort();
-  const classStats = activeClasses.map(classRow => {
-    const classId = classIdKey_(classRow.class_id);
-    const classStudents = activeStudents.filter(row => sameClassId_(row.class_id,classId));
-    const classRows = rangeRows.filter(row => sameClassId_(row.class_id,classId));
-    const dateMap = {};
-    let keldi = 0, sababli = 0, sababsiz = 0;
-    const absentMap = {};
-    const studentNames = {};
-    classStudents.forEach(row => studentNames[String(row.student_id)] = String(row.full_name || ''));
-    classRows.forEach(row => {
-      const date = statisticsDateKey_(row.date);
-      dateMap[date] = true;
-      if (row.status === ATTENDANCE_STATUS.KELDI) keldi += 1;
-      else if (row.status === ATTENDANCE_STATUS.SABABLI || row.status === ATTENDANCE_STATUS.SABABSIZ) {
-        if (row.status === ATTENDANCE_STATUS.SABABLI) sababli += 1; else sababsiz += 1;
-        const sid = String(row.student_id);
-        if (!absentMap[sid]) absentMap[sid] = {studentId:sid,studentName:studentNames[sid] || ('ID ' + sid),sababli:0,sababsiz:0,total:0};
-        if (row.status === ATTENDANCE_STATUS.SABABLI) absentMap[sid].sababli += 1; else absentMap[sid].sababsiz += 1;
-        absentMap[sid].total += 1;
-      }
+function buildStatisticsRangeModelFromRows_(classes, students, attendanceRows, users, superAdminId, startDate, endDate, academicYears, classHistory, calendarRows) {
+  const years = academicYears || [];
+  if (!years.length) {
+    const activeDates = Array.from(new Set((attendanceRows || []).map(row => statisticsDateKey_(row.date)).filter(d => d >= startDate && d <= endDate))).sort();
+    const legacyClasses = (classes || []).filter(row => statisticsActive_(row.active)).map(classRow => {
+      const classId = classIdKey_(classRow.class_id);
+      const classStudents = (students || []).filter(row => statisticsActive_(row.active) && sameClassId_(row.class_id,classId));
+      const rows = (attendanceRows || []).filter(row => activeDates.indexOf(statisticsDateKey_(row.date)) >= 0 && sameClassId_(row.class_id,classId));
+      const submitted = Array.from(new Set(rows.map(row => statisticsDateKey_(row.date))));
+      let keldi=0,sababli=0,sababsiz=0; const absenceMap={}; const names={};
+      classStudents.forEach(st => names[String(st.student_id)] = String(st.full_name || ''));
+      rows.forEach(row => { if (row.status===ATTENDANCE_STATUS.KELDI) keldi++; else if (row.status===ATTENDANCE_STATUS.SABABLI || row.status===ATTENDANCE_STATUS.SABABSIZ) { if(row.status===ATTENDANCE_STATUS.SABABLI)sababli++;else sababsiz++; const id=String(row.student_id); if(!absenceMap[id]) absenceMap[id]={studentId:id,studentName:names[id]||('ID '+id),sababli:0,sababsiz:0,total:0}; absenceMap[id][row.status===ATTENDANCE_STATUS.SABABLI?'sababli':'sababsiz']++; absenceMap[id].total++; }});
+      const teacherId=String(classRow.teacher_telegram_id||'');
+      return {sheetRow:Number(classRow._row)||0,classId:classId,className:String(classRow.class_name||classId),teacherName:teacherId?statisticsPersonName_(users,superAdminId,teacherId):'Rahbar tanlanmagan',totalStudents:classStudents.length,submittedDays:submitted.length,missingDays:Math.max(0,activeDates.length-submitted.length),keldi:keldi,sababli:sababli,sababsiz:sababsiz,absences:Object.keys(absenceMap).map(k=>absenceMap[k])};
     });
-    const teacherId = String(classRow.teacher_telegram_id || '').trim();
-    return {
-      sheetRow:Number(classRow._row) || 0,
-      classId:classId,
-      className:String(classRow.class_name || classId),
-      teacherName:teacherId ? statisticsPersonName_(users,superAdminId,teacherId) : 'Rahbar tanlanmagan',
-      totalStudents:classStudents.length,
-      submittedDays:Object.keys(dateMap).length,
-      missingDays:Math.max(0,activeDates.length - Object.keys(dateMap).length),
-      keldi:keldi,sababli:sababli,sababsiz:sababsiz,
-      absences:Object.keys(absentMap).map(key => absentMap[key]).sort((a,b) => b.total - a.total || a.studentName.localeCompare(b.studentName))
-    };
-  }).sort((a,b) => a.className.localeCompare(b.className));
-  const topAbsences = [];
-  classStats.forEach(item => item.absences.forEach(absent => topAbsences.push(Object.assign({classId:item.classId,className:item.className},absent))));
-  topAbsences.sort((a,b) => b.total - a.total || a.studentName.localeCompare(b.studentName));
-  const days = activeDates.map(date => {
-    const submissions = [];
-    const missing = [];
-    classStats.forEach(item => {
-      const rows = rangeRows.filter(row => statisticsDateKey_(row.date) === date && sameClassId_(row.class_id,item.classId));
-      if (!rows.length) {
-        missing.push({classId:item.classId,className:item.className,teacherName:item.teacherName});
-        return;
-      }
-      let latest = rows[0];
-      rows.forEach(row => { if (String(row.updated_at || '') > String(latest.updated_at || '')) latest = row; });
-      submissions.push({classId:item.classId,className:item.className,submittedByName:statisticsPersonName_(users,superAdminId,latest.updated_by),submittedAt:String(latest.updated_at || '')});
-    });
-    return {date:date,submissions:submissions,missing:missing};
+    const top=[]; legacyClasses.forEach(c=>c.absences.forEach(a=>top.push(Object.assign({classId:c.classId,className:c.className},a)))); top.sort((a,b)=>b.total-a.total);
+    return {start:startDate,end:endDate,schoolDays:activeDates.length,totalClasses:legacyClasses.length,totalStudents:legacyClasses.reduce((n,c)=>n+c.totalStudents,0),keldi:legacyClasses.reduce((n,c)=>n+c.keldi,0),sababli:legacyClasses.reduce((n,c)=>n+c.sababli,0),sababsiz:legacyClasses.reduce((n,c)=>n+c.sababsiz,0),classes:legacyClasses,topAbsences:top,days:[]};
+  }
+  const calendar = calendarRows || [];
+  const history = classHistory || [];
+  const schoolDates = enumerateSchoolDaysFromRows_(years,calendar,startDate,endDate);
+  const yearForDate = {}; schoolDates.forEach(date => { const y=findAcademicYearForDateFromRows_(years,date); if(y)yearForDate[date]=String(y.year_id); });
+  const snapshots = [];
+  years.forEach(year => {
+    const dates = schoolDates.filter(d => yearForDate[d] === String(year.year_id));
+    if (!dates.length) return;
+    let hs = history.filter(h => String(h.academic_year_id) === String(year.year_id));
+    if (!hs.length) hs = (classes || []).filter(c => statisticsActive_(c.active)).map(c => ({class_id:c.class_id,academic_year_id:year.year_id,class_name:c.class_name,teacher_telegram_id:c.teacher_telegram_id,status:'ACTIVE',_row:c._row}));
+    hs.forEach(h => snapshots.push({history:h,year:year,dates:dates}));
   });
-  return {
-    start:startDate,end:endDate,schoolDays:activeDates.length,
-    totalClasses:classStats.length,
-    totalStudents:classStats.reduce((sum,item) => sum + item.totalStudents,0),
-    keldi:classStats.reduce((sum,item) => sum + item.keldi,0),
-    sababli:classStats.reduce((sum,item) => sum + item.sababli,0),
-    sababsiz:classStats.reduce((sum,item) => sum + item.sababsiz,0),
-    classes:classStats,topAbsences:topAbsences,days:days
-  };
+  const classStats = snapshots.map(snapshot => {
+    const h=snapshot.history, classId=classIdKey_(h.class_id), dateSet=snapshot.dates;
+    const classStudents=(students||[]).filter(st=>sameClassId_(st.class_id,classId));
+    const rows=(attendanceRows||[]).filter(row=>sameClassId_(row.class_id,classId) && dateSet.indexOf(statisticsDateKey_(row.date))>=0 && (!String(row.academic_year_id||'') || String(row.academic_year_id)===String(snapshot.year.year_id)));
+    const submitted=Array.from(new Set(rows.map(row=>statisticsDateKey_(row.date)))); const names={}; classStudents.forEach(st=>names[String(st.student_id)]=String(st.full_name||''));
+    let keldi=0,sababli=0,sababsiz=0; const map={};
+    rows.forEach(row=>{ if(row.status===ATTENDANCE_STATUS.KELDI)keldi++; else if(row.status===ATTENDANCE_STATUS.SABABLI||row.status===ATTENDANCE_STATUS.SABABSIZ){ if(row.status===ATTENDANCE_STATUS.SABABLI)sababli++;else sababsiz++; const id=String(row.student_id); if(!map[id])map[id]={studentId:id,studentName:names[id]||('ID '+id),sababli:0,sababsiz:0,total:0}; map[id][row.status===ATTENDANCE_STATUS.SABABLI?'sababli':'sababsiz']++; map[id].total++; }});
+    const teacherId=String(h.teacher_telegram_id||'');
+    return {sheetRow:Number(h._row)||0,classId:classId,academicYearId:String(snapshot.year.year_id),className:String(h.class_name||classId),teacherName:teacherId?statisticsPersonName_(users,superAdminId,teacherId):'Rahbar tanlanmagan',totalStudents:classStudents.length,submittedDays:submitted.length,missingDays:Math.max(0,dateSet.length-submitted.length),keldi:keldi,sababli:sababli,sababsiz:sababsiz,absences:Object.keys(map).map(k=>map[k]).sort((a,b)=>b.total-a.total)};
+  }).sort((a,b)=>a.academicYearId.localeCompare(b.academicYearId)||a.className.localeCompare(b.className));
+  const top=[]; classStats.forEach(c=>c.absences.forEach(a=>top.push(Object.assign({classId:c.classId,className:c.className,academicYearId:c.academicYearId},a)))); top.sort((a,b)=>b.total-a.total||a.studentName.localeCompare(b.studentName));
+  const days=schoolDates.map(date=>{ const yearId=yearForDate[date]; const hs=snapshots.filter(s=>String(s.year.year_id)===yearId).map(s=>s.history); const submissions=[],missing=[]; hs.forEach(h=>{ const rows=(attendanceRows||[]).filter(r=>statisticsDateKey_(r.date)===date&&sameClassId_(r.class_id,h.class_id)); if(!rows.length){missing.push({classId:classIdKey_(h.class_id),className:String(h.class_name),teacherName:String(h.teacher_telegram_id||'')?statisticsPersonName_(users,superAdminId,h.teacher_telegram_id):'Rahbar tanlanmagan'});return;} let latest=rows[0]; rows.forEach(r=>{if(String(r.updated_at||'')>String(latest.updated_at||''))latest=r;}); submissions.push({classId:classIdKey_(h.class_id),className:String(h.class_name),submittedByName:statisticsPersonName_(users,superAdminId,latest.updated_by),submittedAt:String(latest.updated_at||'')}); }); return {date:date,academicYearId:yearId,submissions:submissions,missing:missing}; });
+  return {start:startDate,end:endDate,schoolDays:schoolDates.length,totalClasses:classStats.length,totalStudents:classStats.reduce((n,c)=>n+c.totalStudents,0),keldi:classStats.reduce((n,c)=>n+c.keldi,0),sababli:classStats.reduce((n,c)=>n+c.sababli,0),sababsiz:classStats.reduce((n,c)=>n+c.sababsiz,0),classes:classStats,topAbsences:top,days:days};
 }
 
 function getStatisticsRangeModel_(actor) {
   if (!canViewStatistics_(actor)) throw new Error('Ruxsat yo‘q.');
   const range = getStatisticsRange_(actor.telegramId);
-  const classes = typeof stabilizeAllClassIds_ === 'function' ? stabilizeAllClassIds_() : listActiveClasses_();
-  return buildStatisticsRangeModelFromRows_(classes,getRowsAsObjects_(SHEETS.STUDENTS),getRowsAsObjects_(SHEETS.ATTENDANCE),getRowsAsObjects_(SHEETS.USERS),getSuperAdminId_(),range.start,range.end);
+  return buildStatisticsRangeModelFromRows_(
+    getRowsAsObjects_(SHEETS.CLASSES), getRowsAsObjects_(SHEETS.STUDENTS), getRowsAsObjects_(SHEETS.ATTENDANCE),
+    getRowsAsObjects_(SHEETS.USERS), getSuperAdminId_(), range.start, range.end,
+    getRowsAsObjects_(SHEETS.ACADEMIC_YEARS), getRowsAsObjects_(SHEETS.CLASS_HISTORY), getRowsAsObjects_(SHEETS.CALENDAR)
+  );
 }
 
 function showStatisticsPeriodMenu_(chatId, actor) {
@@ -1136,7 +1107,8 @@ function processNotifications_() {
   const now = new Date();
   const nowTime = Utilities.formatDate(now,Session.getScriptTimeZone(),'HH:mm');
   const today = Utilities.formatDate(now,Session.getScriptTimeZone(),'yyyy-MM-dd');
-  const settingsRows = getRowsAsObjects_(SHEETS.SETTINGS).filter(row => row.notifications_enabled === true || String(row.notifications_enabled).toLowerCase() === 'true');
+  if (!isSchoolDay_(today)) return;
+  const settingsRows = getRowsAsObjects_(SHEETS.SETTINGS).filter(row => isActiveFlag_(row.notifications_enabled));
   settingsRows.forEach(row => {
     const id = String(row.telegram_id || '').trim();
     if (!id || String(row.last_notification_date || '') === today || !notificationDueNow_(nowTime,String(row.notification_time || '08:00'))) return;
@@ -1150,14 +1122,10 @@ function processNotifications_() {
         const missing = model.classes.filter(item => !item.submitted);
         if (missing.length) sendLongText_(id,'Bugun davomat bermagan sinflar:\n' + missing.map(item => '- ' + item.className + ' — ' + item.teacherName).join('\n'));
       }
-    } catch (error) {
-      console.error('Bildirişnoma xatosi:',error && error.message ? error.message : error);
-    }
-    try { saveNotificationSettings_(id,{lastDate:today}); } catch (_saveError) {}
+      saveNotificationSettings_(id,{lastDate:today});
+    } catch (error) { console.error('Bildirişnoma xatosi:',error && error.message ? error.message : error); }
   });
 }
-
-
 
 // ===== AcademicYearCalendarCore.gs =====
 

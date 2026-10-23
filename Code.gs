@@ -19,7 +19,7 @@ const SHEET_HEADERS = Object.freeze({
   STUDENTS: ['student_id','full_name','class_id','active','graduated_year_id','graduated_at'],
   USERS: ['telegram_id','full_name','role','class_id','active'],
   ATTENDANCE: ['date','class_id','student_id','status','updated_by','updated_at','academic_year_id'],
-  SETTINGS: ['telegram_id','notifications_enabled','notification_time','last_notification_date'],
+  SETTINGS: ['telegram_id','notifications_enabled','notification_time','last_notification_date','reminder_mode','reminder_interval_minutes','reminder_end_time','reminder_last_sent_at','reminder_muted_date'],
   ACADEMIC_YEARS: ['year_id','title','start_date','end_date','promotion_date','status','promoted_at','activated_at'],
   CLASS_HISTORY: ['class_id','academic_year_id','class_name','grade','section','teacher_telegram_id','active_from','active_to','status'],
   CALENDAR: ['event_id','start_date','end_date','type','title','active','created_by','created_at']
@@ -1809,65 +1809,106 @@ function showRangeDays_(chatId, actor) {
   sendLongText_(chatId,lines.join('\n'),rangeBackKeyboard_());
 }
 
+
 function ensureSettingsSheet_() {
-  const ss = getSpreadsheet_();
-  let sheet = ss.getSheetByName(SHEETS.SETTINGS);
-  if (!sheet) {
-    sheet = ss.insertSheet(SHEETS.SETTINGS);
-    sheet.getRange(1,1,1,SHEET_HEADERS.SETTINGS.length).setValues([SHEET_HEADERS.SETTINGS]);
+  const sheet=getSheet_(SHEETS.SETTINGS);
+  const headers=getHeaders_(SHEETS.SETTINGS);
+  if(SHEET_HEADERS.SETTINGS.some(h=>headers.indexOf(h)<0)){
+    ensureSheetSchema_(SHEETS.SETTINGS,SHEET_HEADERS.SETTINGS);
+    invalidateSheet_(SHEETS.SETTINGS);
   }
   return sheet;
 }
-
 function normalizeNotificationTime_(value) {
-  const m = /^\s*(\d{1,2}):(\d{2})\s*$/.exec(String(value || ''));
-  if (!m) throw new Error('Vaqtni HH:MM formatida yuboring. Masalan: 08:30');
-  const h = Number(m[1]), min = Number(m[2]);
-  if (h < 0 || h > 23 || min < 0 || min > 59) throw new Error('Vaqt noto‘g‘ri.');
-  return String(h).padStart(2,'0') + ':' + String(min).padStart(2,'0');
+  const m=/^\s*(\d{1,2}):(\d{2})\s*$/.exec(String(value||''));
+  if(!m)throw new Error('Vaqt HH:MM ko‘rinishida bo‘lishi kerak.');
+  const h=Number(m[1]),mm=Number(m[2]);
+  if(h>23||mm>59)throw new Error('Vaqt noto‘g‘ri.');
+  return String(h).padStart(2,'0')+':'+String(mm).padStart(2,'0');
 }
-
-function notificationDueNow_(nowTime, targetTime) {
-  const toMinutes = value => {
-    const parts = String(value || '').split(':').map(Number);
-    return parts.length === 2 && isFinite(parts[0]) && isFinite(parts[1]) ? parts[0] * 60 + parts[1] : -9999;
-  };
-  const diff = toMinutes(nowTime) - toMinutes(targetTime);
-  return diff >= 0 && diff < 10;
+function notificationMinutes_(value) {
+  const p=normalizeNotificationTime_(value).split(':').map(Number);
+  return p[0]*60+p[1];
 }
-
+function notificationMode_(row) {
+  const raw=String(row.reminder_mode||'').toLowerCase();
+  if(['off','once','repeat'].indexOf(raw)>=0)return raw;
+  return isActiveFlag_(row.notifications_enabled)?'once':'off';
+}
+function notificationInterval_(value) {
+  const n=Number(value);
+  if(!Number.isInteger(n)||[1,2,3,5,10,15,20,30,60].indexOf(n)<0)
+    throw new Error('Oraliq 1, 2, 3, 5, 10, 15, 20, 30 yoki 60 daqiqa bo‘lishi kerak.');
+  return n;
+}
+function notificationSettingsFromRow_(row,id) {
+  const mode=notificationMode_(row);
+  return {telegramId:String(id||row.telegram_id||''),mode:mode,enabled:mode!=='off',
+    time:normalizeNotificationTime_(row.notification_time||'08:00'),
+    endTime:normalizeNotificationTime_(row.reminder_end_time||'12:00'),
+    interval:notificationInterval_(row.reminder_interval_minutes||15),
+    lastDate:statisticsDateKey_(row.last_notification_date||''),
+    lastSentAt:String(row.reminder_last_sent_at||''),
+    mutedDate:statisticsDateKey_(row.reminder_muted_date||'')};
+}
 function getNotificationSettings_(telegramId) {
   ensureSettingsSheet_();
-  const row = findRowByValue_(SHEETS.SETTINGS,'telegram_id',String(telegramId));
-  return row ? {
-    telegramId:String(telegramId),
-    enabled:row.notifications_enabled === true || String(row.notifications_enabled).toLowerCase() === 'true',
-    time:String(row.notification_time || '08:00'),
-    lastDate:String(row.last_notification_date || '')
-  } : {telegramId:String(telegramId),enabled:false,time:'08:00',lastDate:''};
+  const id=String(telegramId),row=findRowByValue_(SHEETS.SETTINGS,'telegram_id',id);
+  return notificationSettingsFromRow_(row||{},id);
 }
-
-function saveNotificationSettings_(telegramId, updates) {
+function saveNotificationSettings_(telegramId,updates) {
   ensureSettingsSheet_();
-  const id = String(telegramId);
-  const current = getNotificationSettings_(id);
-  const next = {
-    telegram_id:id,
-    notifications_enabled:Object.prototype.hasOwnProperty.call(updates,'enabled') ? Boolean(updates.enabled) : current.enabled,
-    notification_time:Object.prototype.hasOwnProperty.call(updates,'time') ? normalizeNotificationTime_(updates.time) : current.time,
-    last_notification_date:Object.prototype.hasOwnProperty.call(updates,'lastDate') ? String(updates.lastDate || '') : current.lastDate
-  };
-  const row = findRowByValue_(SHEETS.SETTINGS,'telegram_id',id);
-  if (row) updateObjectRow_(SHEETS.SETTINGS,row._row,next); else appendObjectRow_(SHEETS.SETTINGS,next);
+  const id=String(telegramId),input=updates||{},current=getNotificationSettings_(id);
+  let mode=current.mode;
+  if(Object.prototype.hasOwnProperty.call(input,'mode')){
+    mode=String(input.mode||'').toLowerCase();
+    if(['off','once','repeat'].indexOf(mode)<0)throw new Error('Eslatma rejimi noto‘g‘ri.');
+  }else if(Object.prototype.hasOwnProperty.call(input,'enabled')){
+    mode=input.enabled===true?(current.mode==='repeat'?'repeat':'once'):'off';
+  }
+  const start=Object.prototype.hasOwnProperty.call(input,'time')?
+    normalizeNotificationTime_(input.time):current.time;
+  const end=Object.prototype.hasOwnProperty.call(input,'endTime')?
+    normalizeNotificationTime_(input.endTime):current.endTime;
+  const interval=Object.prototype.hasOwnProperty.call(input,'interval')?
+    notificationInterval_(input.interval):current.interval;
+  if(mode==='repeat'&&notificationMinutes_(start)>=notificationMinutes_(end))
+    throw new Error('Tugash vaqti boshlanish vaqtidan keyin bo‘lishi kerak.');
+  const next={telegram_id:id,notifications_enabled:mode!=='off',notification_time:start,
+    reminder_mode:mode,reminder_interval_minutes:interval,reminder_end_time:end};
+  if(Object.prototype.hasOwnProperty.call(input,'lastDate'))next.last_notification_date=String(input.lastDate||'');
+  if(Object.prototype.hasOwnProperty.call(input,'lastSentAt'))next.reminder_last_sent_at=String(input.lastSentAt||'');
+  if(Object.prototype.hasOwnProperty.call(input,'mutedDate'))next.reminder_muted_date=String(input.mutedDate||'');
+  const row=findRowByValue_(SHEETS.SETTINGS,'telegram_id',id);
+  if(row)updateObjectRow_(SHEETS.SETTINGS,row._row,next);
+  else appendObjectRow_(SHEETS.SETTINGS,Object.assign({last_notification_date:current.lastDate,
+    reminder_last_sent_at:current.lastSentAt,reminder_muted_date:current.mutedDate},next));
   return getNotificationSettings_(id);
 }
-
-function ensureNotificationTrigger_() {
-  const exists = ScriptApp.getProjectTriggers().some(trigger => trigger.getHandlerFunction() === 'processNotifications_');
-  if (!exists) ScriptApp.newTrigger('processNotifications_').timeBased().everyMinutes(5).create();
-  return true;
+function notificationDue_(settings,now,nowTime,today) {
+  if(!settings||settings.mode==='off'||settings.mutedDate===today)return false;
+  const minutes=notificationMinutes_(nowTime),start=notificationMinutes_(settings.time);
+  if(minutes<start)return false;
+  if(settings.mode==='once')return settings.lastDate!==today;
+  if(settings.mode!=='repeat'||minutes>=notificationMinutes_(settings.endTime))return false;
+  if(!settings.lastSentAt)return true;
+  const last=Date.parse(settings.lastSentAt);
+  if(!Number.isFinite(last))return true;
+  const localDate=Utilities.formatDate(new Date(last),Session.getScriptTimeZone(),'yyyy-MM-dd');
+  return localDate!==today||now.getTime()-last>=settings.interval*60000;
 }
-
+function ensureNotificationTrigger_() {
+  const quick=getRowsAsObjects_(SHEETS.SETTINGS).some(r=>notificationMode_(r)==='repeat'&&
+    notificationInterval_(r.reminder_interval_minutes||15)===1);
+  const cadence=quick?1:5;
+  const props=PropertiesService.getScriptProperties(),key='DAVOMAT_REMINDER_TRIGGER_MINUTES';
+  const triggers=ScriptApp.getProjectTriggers().filter(t=>t.getHandlerFunction()==='processNotifications_');
+  if(triggers.length===1&&props.getProperty(key)===String(cadence))return cadence;
+  triggers.forEach(t=>ScriptApp.deleteTrigger(t));
+  ScriptApp.newTrigger('processNotifications_').timeBased().everyMinutes(cadence).create();
+  props.setProperty(key,String(cadence));
+  return cadence;
+}
 function showSettings_(chatId, actor) {
   if (!actor || actor.role === ROLES.UNASSIGNED) throw new Error('Ruxsat yo‘q.');
   const settings = getNotificationSettings_(actor.telegramId);

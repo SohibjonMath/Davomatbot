@@ -3,12 +3,12 @@
 (() => {
   'use strict';
   const labels = {
-    attendance:'Davomat',statistics:'Statistika',classes:'Sinflar',
+    attendance:'Davomat',history:'Ötgan sanalar',statistics:'Statistika',control:'Rahbarlar nazorati',classes:'Sinflar',
     students:'Öquvçilar',year:'Öquv yili',calendar:'Taqvim',
     admins:'Adminlar',settings:'Sozlamalar'
   };
   const icons = {
-    attendance:'clipboard-check',statistics:'chart-column',classes:'school',
+    attendance:'clipboard-check',history:'calendar-days',statistics:'chart-column',control:'clipboard-list',classes:'school',
     students:'users',year:'calendar-days',calendar:'calendar',
     admins:'user-shield',settings:'gear'
   };
@@ -32,27 +32,20 @@
     startDate:'',endDate:'',busy:false,serial:0
   };
 
-  function nav() {
-    const el=$('sectionNav');el.innerHTML='';
-    for (const page of store.allowed) {
-      const button=document.createElement('button');
-      button.type='button';
-      button.textContent=labels[page];
-      button.dataset.page=page;
-      button.setAttribute('aria-current',page===store.page?'page':'false');
-      el.appendChild(button);
-    }
-  }
   function message(text,error=false) {
     const el=$('sectionStatus');
     el.textContent=text||'';
     el.className='sectionMessage'+(error?' error':'');
   }
   function changeView(page) {
-    $('app').classList.toggle('hidden',page!=='attendance');
-    $('sticky').classList.toggle('hidden',page!=='attendance');
-    $('sectionPanel').classList.toggle('hidden',page==='attendance');
-    nav();
+    const attendance=page==='attendance'||page==='history';
+    $('app').classList.toggle('hidden',!attendance);
+    $('sticky').classList.toggle('hidden',!attendance);
+    $('sectionPanel').classList.toggle('hidden',attendance);
+    if(!attendance){
+      $('pageTitle').textContent=labels[page]||'Davomat';
+      $('pageSubtitle').textContent='Namangan 1-IMI';
+    }
   }
   function start(bootstrap,api,afterWrite,onAttendance) {
     store.bootstrap=bootstrap;
@@ -60,10 +53,6 @@
     store.afterWrite=afterWrite;
     store.onAttendance=onAttendance;
     store.allowed=Array.isArray(bootstrap.pages)?bootstrap.pages:['attendance'];
-    $('sectionNav').addEventListener('click',event=>{
-      const target=event.target.closest('[data-page]');
-      if(target)show(target.dataset.page);
-    });
     $('sectionPanel').addEventListener('click',handleClick);
     $('sectionPanel').addEventListener('change',handleChange);
     $('sectionPanel').addEventListener('input',handleInput);
@@ -74,8 +63,8 @@
     if(!store.allowed.includes(page))return;
     store.page=page;
     changeView(page);
-    if(page==='attendance') {
-      if(typeof store.onAttendance==='function')store.onAttendance();
+    if(page==='attendance'||page==='history') {
+      if(typeof store.onAttendance==='function')store.onAttendance(page);
       return;
     }
     const serial=++store.serial;
@@ -191,6 +180,7 @@
 
   function render(page,data) {
     if(page==='statistics')return renderStats(data);
+    if(page==='control')return renderControl(data);
     if(page==='classes')return renderClasses(data);
     if(page==='students')return renderStudents(data);
     if(page==='year')return renderYears(data);
@@ -215,10 +205,12 @@
         ['Öquvçilar',m.totalStudents||0],['Keldi',m.keldi||0],['Sababli',m.sababli||0],['Sababsiz',m.sababsiz||0]]);
     }
     const classes=(m.classes||[]).map(c=>{
+      const classState=range?(c.missingDays>0?'missing':'done'):(c.submitted?'done':'missing');
       const note=range
         ?'Davomatli kunlar: '+(c.submittedDays||0)+' / '+(c.schoolDays||0)+' · Keldi: '+(c.keldi||0)+' · Sababli: '+(c.sababli||0)+' · Sababsiz: '+(c.sababsiz||0)
         :(c.submitted?'Davomat berilgan':'Davomat berilmagan')+' · Keldi: '+(c.keldi||0)+' · Sababli: '+(c.sababli||0)+' · Sababsiz: '+(c.sababsiz||0);
-      return item(c.className,note);
+      return '<div class="sectionItem tone-'+classState+'"><div class="details"><strong>'+esc(c.className)+'</strong>'+ 
+        '<small>'+esc(c.teacherName||'Rahbar biriktirilmagan')+'</small><small>'+esc(note)+'</small></div></div>';
     }).join('');
     const absences=(!range?m.absences:m.topAbsences)||[];
     const absenceList=absences.slice(0,50).map(x=>item(x.studentName,(x.className||'')+' · '+(x.status||('Jami '+x.total)))).join('');
@@ -226,6 +218,31 @@
       '<h3>Sinflar kesimida</h3><div class="sectionList">'+(classes||empty('Ma’lumot yo‘q.'))+'</div>'+
       '<h3>Kelmagan öquvçilar</h3><div class="sectionList">'+(absenceList||empty('Kelmagan öquvçi yo‘q.'))+'</div></div>';
   }
+
+  function renderControl(data) {
+    const totals=metrics([
+      ['Barcha sinflar',data.total||0],['Topşirgan',data.done||0],
+      ['Bermagan',data.missing||0],['Chala',data.partial||0],
+      ['Rahbarsiz',data.unassigned||0]
+    ]);
+    const tone={done:'done',missing:'missing',partial:'partial',unassigned:'unassigned'};
+    const status={done:'To‘liq berilgan',missing:'Berilmagan',partial:'Qisman berilgan',unassigned:'Rahbar yo‘q'};
+    const rows=(data.items||[]).map(row=>{
+      const state=tone[row.status]||'missing';
+      return '<div class="sectionItem tone-'+state+'"><div class="details"><strong>'+esc(row.name)+'</strong>'+
+        '<small>'+esc(row.teacherName||'Rahbar biriktirilmagan')+'</small>'+
+        '<small>'+esc(status[row.status]||'Berilmagan')+' · '+esc(row.submitted||0)+' / '+esc(row.total||0)+
+        ' · Keldi '+esc(row.keldi||0)+' · Sababli '+esc(row.sababli||0)+' · Sababsiz '+esc(row.sababsiz||0)+'</small></div>'+
+        '<span class="stateLabel">'+esc(status[row.status]||'Berilmagan')+'</span></div>';
+    }).join('');
+    const dateInput='<div class="sectionToolbar"><label class="small">Sana <input id="controlDate" type="date" value="'+
+      esc(data.date)+'" max="'+esc(store.bootstrap.today)+'"></label>'+
+      btn('Körsatish','control.filter','','accent')+'</div>';
+    $('sectionPanel').innerHTML='<div class="card">'+heading('control')+dateInput+
+      (data.schoolDay?'':'<div class="sectionEmpty">Bu sana öqiş kuni emas.</div>')+
+      totals+'<div class="sectionList">'+(rows||empty('Sinf topilmadi.'))+'</div></div>';
+  }
+
   function renderClasses(data) {
     const rows=(data.items||[]).map(c=>item(c.name,c.students+' ta öquvçi'+(c.teacher?' · '+c.teacher:' · Rahbar biriktirilmagan'),
       btn('Tahrir','class.rename','data-id="'+esc(c.id)+'"')+
@@ -288,6 +305,7 @@
     const action=button.dataset.action, id=button.dataset.id||'';
     const page=store.page, datum=store.cache.get(page);
     if(action==='retry')return refresh();
+    if(action==='control.filter')return show('control',true,{date:$('controlDate')?.value});
     if(action==='stats.filter') {
       const start=$('statsFrom')?.value,end=$('statsTo')?.value;
       store.startDate=start;store.endDate=end;
@@ -367,7 +385,6 @@
     store.bootstrap=bootstrap;
     store.allowed=bootstrap.pages||['attendance'];
     store.cache.clear();
-    nav();
   }
   window.DavomatSections={start,show,updateBootstrap};
 })();

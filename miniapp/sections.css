@@ -1,6 +1,3 @@
-.sectionsNav{display:flex;gap:6px;overflow-x:auto;padding:0 0 12px;margin:0 0 10px;scrollbar-width:thin}
-.sectionsNav button{border:1px solid #d9e0e8;background:#fff;color:#002050;padding:9px 12px;white-space:nowrap;border-radius:4px;font-weight:600;min-height:39px}
-.sectionsNav button[aria-current=page]{background:#002050;border-color:#002050;color:#fff}
 .sectionPanel{min-height:190px}
 .sectionHeading{display:flex;gap:9px;justify-content:space-between;align-items:center;flex-wrap:wrap;margin-bottom:14px}
 .sectionHeading h2{font-size:20px;margin:0;font-weight:700}
@@ -37,3 +34,39 @@
 .sectionMessage.error{color:#b13232}
 .sectionYearTag{display:inline-block;border:1px solid #cad8e8;border-radius:3px;padding:3px 6px;color:#002050;font-size:11px}
 @media(max-width:480px){.sectionItem{align-items:flex-start;flex-direction:column}.sectionItem .actions{align-self:stretch}.sectionItem .actions button{flex:1}.sectionHeading h2{font-size:18px}}
+
+/* Responsive page surfaces never exceed Telegram's Mini App viewport. */
+.sectionPanel,.sectionPanel *{min-width:0}
+.sectionPanel{width:100%;max-width:100%;overflow-x:clip}
+.sectionPanel .card{overflow:hidden}
+.sectionToolbar{width:100%;max-width:100%;min-width:0}
+.sectionToolbar>*{min-width:0;max-width:100%}
+.sectionToolbar label{display:flex;flex-wrap:wrap;align-items:center;gap:5px;max-width:100%}
+.sectionToolbar input[type=date]{width:min(155px,100%)}
+.sectionItem{max-width:100%;overflow-wrap:anywhere}
+.sectionItem .details{min-width:0;flex:1}
+.sectionItem .details small{white-space:normal;overflow-wrap:anywhere;line-height:1.45}
+.sectionGrid{grid-template-columns:repeat(2,minmax(0,1fr))}
+.sectionMetric{min-width:0;overflow-wrap:anywhere}
+.sectionMetric strong{font-size:clamp(20px,5vw,26px)}
+.sectionMetric.tone-done{background:#eaf8ee;border-color:#a7d5b8;color:#167346}
+.sectionMetric.tone-missing,.sectionMetric.tone-unassigned{background:#fff0f1;border-color:#edb4b9;color:#ad2f40}
+.sectionMetric.tone-partial{background:#fff4dd;border-color:#edd29b;color:#8b5902}
+.sectionItem.tone-done{background:#ecf8ef;border-color:#abdbc0;border-left:4px solid #218356}
+.sectionItem.tone-missing,.sectionItem.tone-unassigned{background:#fff0f1;border-color:#ebbdc2;border-left:4px solid #c23a4a}
+.sectionItem.tone-partial{background:#fff5df;border-color:#efd7a3;border-left:4px solid #d0982a}
+.sectionItem.tone-muted{background:#f5f7fa;border-left:4px solid #8a9aa9}
+.stateLabel{display:inline-block;flex-shrink:0;font-size:11px;font-weight:700;border:1px solid currentColor;border-radius:3px;padding:5px 7px}
+.tone-done .stateLabel{color:#167346}
+.tone-missing .stateLabel,.tone-unassigned .stateLabel{color:#ae2f3f}
+.tone-partial .stateLabel{color:#8e5c09}
+.sectionPanel h3{font-size:14px;margin:19px 0 9px}
+.sectionPanel .sectionList{max-width:100%}
+@media(max-width:500px){
+  .sectionPanel .sectionToolbar{gap:7px}
+  .sectionPanel .sectionItem{flex-direction:column;align-items:stretch;gap:8px}
+  .sectionPanel .sectionItem .actions{align-self:stretch;width:100%}
+  .sectionPanel .sectionItem .actions .sectionButton{flex:1}
+  .stateLabel{align-self:flex-start}
+  .sectionMetric{padding:12px}
+}

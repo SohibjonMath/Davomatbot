@@ -25,11 +25,10 @@
   const empty = text => '<div class="sectionEmpty">'+esc(text)+'</div>';
   const metrics = pairs => '<div class="sectionGrid">'+pairs.map(([name,value])=>
     '<div class="sectionMetric"><span>'+esc(name)+'</span><strong>'+esc(value)+'</strong></div>').join('')+'</div>';
-  const yesNo = value => value ? 'Ha' : 'Yo‘q';
 
   const store = {
-    api:null,bootstrap:null,afterWrite:null,page:'attendance',cache:new Map(),
-    allowed:[],classes:[],studentClass:'',studentSearch:'',
+    api:null,bootstrap:null,afterWrite:null,onAttendance:null,page:'attendance',cache:new Map(),
+    allowed:[],studentClass:'',studentSearch:'',
     startDate:'',endDate:'',busy:false,serial:0
   };
 
@@ -55,12 +54,12 @@
     $('sectionPanel').classList.toggle('hidden',page==='attendance');
     nav();
   }
-  function start(bootstrap,api,afterWrite) {
+  function start(bootstrap,api,afterWrite,onAttendance) {
     store.bootstrap=bootstrap;
     store.api=api;
     store.afterWrite=afterWrite;
+    store.onAttendance=onAttendance;
     store.allowed=Array.isArray(bootstrap.pages)?bootstrap.pages:['attendance'];
-    store.classes=bootstrap.classes||[];
     $('sectionNav').addEventListener('click',event=>{
       const target=event.target.closest('[data-page]');
       if(target)show(target.dataset.page);
@@ -75,7 +74,10 @@
     if(!store.allowed.includes(page))return;
     store.page=page;
     changeView(page);
-    if(page==='attendance')return;
+    if(page==='attendance') {
+      if(typeof store.onAttendance==='function')store.onAttendance();
+      return;
+    }
     const serial=++store.serial;
     if(!force&&store.cache.has(page)) {
       render(page,store.cache.get(page));
@@ -361,5 +363,11 @@
     }
   }
 
-  window.DavomatSections={start,show};
+  function updateBootstrap(bootstrap) {
+    store.bootstrap=bootstrap;
+    store.allowed=bootstrap.pages||['attendance'];
+    store.cache.clear();
+    nav();
+  }
+  window.DavomatSections={start,show,updateBootstrap};
 })();

@@ -475,6 +475,193 @@ function removeAdmin_(actor, telegramId) {
 }
 
 
+
+// ===== DavomatYearView.gs =====
+// One readable sheet per school year; the hidden row log remains authoritative.
+function davomatYearId_(date, assignedYearId) {
+  const id = String(assignedYearId || '').trim();
+  if (/^\d{4}-\d{4}$/.test(id)) return id;
+  const key = normalizeDateKey_(date);
+  const year = findAcademicYearForDateFromRows_(getRowsAsObjects_(SHEETS.ACADEMIC_YEARS), key);
+  if (year && /^\d{4}-\d{4}$/.test(String(year.year_id))) return String(year.year_id);
+  const start = Number(key.slice(0,4)) - (Number(key.slice(5,7)) < 7 ? 1 : 0);
+  return start + '-' + (start + 1);
+}
+
+function davomatYearName_(yearId) {
+  if (!/^\d{4}-\d{4}$/.test(String(yearId))) throw new Error('O‘quv yili noto‘g‘ri.');
+  return String(yearId) + ' davomat';
+}
+
+function davomatSymbol_(status) {
+  if (status === ATTENDANCE_STATUS.KELDI) return '+';
+  if (status === ATTENDANCE_STATUS.SABABLI) return 's';
+  if (status === ATTENDANCE_STATUS.SABABSIZ) return '-';
+  return '';
+}
+
+function davomatClassNames_(yearId) {
+  const result = {};
+  getRowsAsObjects_(SHEETS.CLASSES).forEach(row => {
+    result[classIdKey_(row.class_id)] = String(row.class_name || row.class_id);
+  });
+  getRowsAsObjects_(SHEETS.CLASS_HISTORY).forEach(row => {
+    if (String(row.academic_year_id) === String(yearId))
+      result[classIdKey_(row.class_id)] = String(row.class_name || row.class_id);
+  });
+  return result;
+}
+
+function davomatEnsureSize_(sheet, rows, cols) {
+  if (rows > sheet.getMaxRows()) sheet.insertRowsAfter(sheet.getMaxRows(), rows - sheet.getMaxRows());
+  if (cols > sheet.getMaxColumns()) sheet.insertColumnsAfter(sheet.getMaxColumns(), cols - sheet.getMaxColumns());
+}
+
+function davomatStyleYearSheet_(sheet, width) {
+  sheet.setFrozenRows(1);
+  sheet.setFrozenColumns(2);
+  sheet.setColumnWidth(1, 240);
+  sheet.setColumnWidth(2, 90);
+  sheet.setColumnWidth(3, 70);
+  sheet.getRange(1,1,1,width).setBackground('#002050').setFontColor('#ffffff').setFontWeight('bold');
+  if (width > 3) sheet.setColumnWidths(4, width - 3, 95);
+  if (!sheet.isColumnHiddenByUser(3)) sheet.hideColumns(3); // Student ID: technical, not for readers.
+  sheet.setTabColor('#002050');
+  sheet.getRange('A1').setNote('Belgilar: + — keldi; - — sababsiz; s — sababli. Bo‘sh katak — davomat kiritilmagan.');
+}
+
+function davomatColorDay_(sheet, column, symbols) {
+  if (!symbols.length) return;
+  const colors = symbols.map(value => {
+    if (value === '+') return ['#e5f5eb'];
+    if (value === '-') return ['#fde8e8'];
+    if (value === 's') return ['#fff2d5'];
+    return ['#ffffff'];
+  });
+  sheet.getRange(2,column,symbols.length,1).setBackgrounds(colors);
+}
+
+// Explicit/first-time rebuild; data is never deleted from the original log.
+function davomatBuildYearSheet_(yearId, attendanceRows, overwrite) {
+  const ss = getSpreadsheet_(), name = davomatYearName_(yearId);
+  let sheet = ss.getSheetByName(name);
+  if (sheet && !overwrite) return sheet;
+  if (!sheet) sheet = ss.insertSheet(name);
+  const data = attendanceRows || [];
+  const students = getRowsAsObjects_(SHEETS.STUDENTS);
+  const byId = {};
+  students.forEach(st => { byId[String(st.student_id)] = st; });
+  const years = getRowsAsObjects_(SHEETS.ACADEMIC_YEARS);
+  const activeYear = years.some(y => String(y.year_id)===String(yearId) && String(y.status).toUpperCase()==='ACTIVE');
+  const ids = {};
+  data.forEach(row => { ids[String(row.student_id)] = true; });
+  if (activeYear) students.filter(st=>isActiveFlag_(st.active)).forEach(st => { ids[String(st.student_id)] = true; });
+  const classNames = davomatClassNames_(yearId);
+  const roster = Object.keys(ids).map(id => {
+    const st = byId[id] || {};
+    const record = data.find(r => String(r.student_id) === id);
+    const classId = classIdKey_(st.class_id || (record && record.class_id));
+    return {id:id, name:String(st.full_name || 'ID ' + id), className:classNames[classId] || classId};
+  }).sort((a,b)=>a.className.localeCompare(b.className) || a.name.localeCompare(b.name));
+  const dates = Array.from(new Set(data.map(r=>statisticsDateKey_(r.date)))).filter(d=>/^\d{4}-\d{2}-\d{2}$/.test(d)).sort();
+  const datesIndex = {}; dates.forEach((d,i)=>datesIndex[d]=i+3);
+  const positions = {}; roster.forEach((st,i)=>{ positions[st.id]=i+1; });
+  const grid = [['Ism familiyasi','Sinfi','ID'].concat(dates)];
+  roster.forEach(st=>grid.push([st.name,st.className,st.id].concat(dates.map(_=>''))));
+  data.forEach(row=>{
+    const rowIndex=positions[String(row.student_id)], colIndex=datesIndex[statisticsDateKey_(row.date)];
+    if(rowIndex && colIndex!==undefined) grid[rowIndex][colIndex]=davomatSymbol_(row.status);
+  });
+  davomatEnsureSize_(sheet,grid.length,grid[0].length);
+  sheet.clearContents();
+  sheet.getRange(1,1,1,grid[0].length).setNumberFormat('@');
+  sheet.getRange(1,1,grid.length,grid[0].length).setValues(grid);
+  davomatStyleYearSheet_(sheet,grid[0].length);
+  dates.forEach((d,i)=>{
+    const col=i+4;
+    davomatColorDay_(sheet,col,grid.slice(1).map(row=>row[col-1]));
+  });
+  return sheet;
+}
+
+// Run once after deploying or whenever a controlled re-sync is necessary.
+function syncDavomatYearSheets_(overwrite) {
+  ensureSchema_();
+  const all=getRowsAsObjects_(SHEETS.ATTENDANCE), byYear={};
+  all.forEach(row=>{
+    const id=davomatYearId_(row.date,row.academic_year_id);
+    if(!byYear[id]) byYear[id]=[];
+    byYear[id].push(row);
+  });
+  const active=getActiveAcademicYear_();
+  if(active && !byYear[String(active.year_id)]) byYear[String(active.year_id)]=[];
+  if(!Object.keys(byYear).length) byYear[davomatYearId_(todayKey_())]=[];
+  Object.keys(byYear).sort().forEach(id=>davomatBuildYearSheet_(id,byYear[id],Boolean(overwrite)));
+  const technical=getSheet_(SHEETS.ATTENDANCE);
+  if (!technical.isSheetHidden()) technical.hideSheet();
+  return Object.keys(byYear).map(davomatYearName_);
+}
+
+function rebuildDavomatYearSheets() {
+  resetRequestCache_();
+  return syncDavomatYearSheets_(true);
+}
+
+// Single-column day update, even if a whole class submits at once.
+function davomatUpdateYearSheet_(yearId, classId, date, saved) {
+  const ss=getSpreadsheet_(), name=davomatYearName_(yearId);
+  let sheet=ss.getSheetByName(name);
+  if(!sheet) {
+    const rows=getRowsAsObjects_(SHEETS.ATTENDANCE).filter(r=>davomatYearId_(r.date,r.academic_year_id)===yearId);
+    sheet=davomatBuildYearSheet_(yearId,rows,true);
+    const technical=getSheet_(SHEETS.ATTENDANCE);
+    if(!technical.isSheetHidden()) technical.hideSheet();
+    return;
+  }
+  const classes=davomatClassNames_(yearId);
+  const students=getRowsAsObjects_(SHEETS.STUDENTS);
+  const wanted=students.filter(st=>isActiveFlag_(st.active));
+  let count=sheet.getLastRow()-1;
+  const known=count>0?sheet.getRange(2,1,count,3).getValues():[];
+  const knownIds={};
+  known.forEach(row=>{knownIds[String(row[2])]=true;});
+  const missing=wanted.filter(st=>!knownIds[String(st.student_id)]);
+  if(missing.length) {
+    const width=Math.max(sheet.getLastColumn(),3);
+    davomatEnsureSize_(sheet,sheet.getLastRow()+missing.length,width);
+    sheet.getRange(sheet.getLastRow()+1,1,missing.length,3).setValues(missing.map(st=>[
+      String(st.full_name),classes[classIdKey_(st.class_id)] || classIdKey_(st.class_id),String(st.student_id)
+    ]));
+    count += missing.length;
+    // Whole-row sort preserves past date marks for each person.
+    sheet.getRange(2,1,count,width).sort([{column:2,ascending:true},{column:1,ascending:true}]);
+  }
+  const dateKey=normalizeDateKey_(date);
+  const width=sheet.getLastColumn();
+  const headers=width>=4?sheet.getRange(1,4,1,width-3).getDisplayValues()[0].map(String):[];
+  let column=headers.indexOf(dateKey);
+  if(column>=0) column+=4;
+  else {
+    const insertAt=headers.findIndex(value=>value && value>dateKey);
+    if(insertAt>=0) {
+      column=insertAt+4;
+      sheet.insertColumnBefore(column);
+    } else column=width+1;
+    davomatEnsureSize_(sheet,1,column);
+    sheet.getRange(1,column).setNumberFormat('@').setValue(dateKey);
+    sheet.getRange(1,column).setBackground('#002050').setFontColor('#ffffff').setFontWeight('bold');
+    sheet.setColumnWidth(column,95);
+  }
+  if(count<=0) return;
+  const ids=sheet.getRange(2,3,count,1).getValues().map(r=>String(r[0]));
+  const byId={};
+  (saved||[]).forEach(st=>{byId[String(st.studentId)]=davomatSymbol_(st.status);});
+  const range=sheet.getRange(2,column,count,1),values=range.getValues();
+  ids.forEach((id,i)=>{if(Object.prototype.hasOwnProperty.call(byId,id))values[i][0]=byId[id];});
+  range.setValues(values);
+  davomatColorDay_(sheet,column,values.map(r=>r[0]));
+}
+
 // ===== Attendance.gs =====
 
 function normalizeDateKey_(date) {
@@ -1657,7 +1844,8 @@ function setTelegramWebhook_() {
 }
 
 function setupDavomatOne() {
-  return ensureSchema_();
+  resetRequestCache_();
+  return syncDavomatYearSheets_(false);
 }
 
 function installNotificationTrigger() {

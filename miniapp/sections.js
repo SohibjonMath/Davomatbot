@@ -260,7 +260,7 @@
     const list=$('controlList');
     if(!list)return;
     list.querySelectorAll('.sectionItem').forEach(row=>{
-      row.classList.toggle('hidden',store.controlFilter!=='all' && row.dataset.state!=='tone-'+store.controlFilter);
+      row.classList.toggle('hidden',store.controlFilter!=='all' && row.dataset.state!==store.controlFilter);
     });
   }
   function renderClasses(data) {

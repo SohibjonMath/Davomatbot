@@ -493,6 +493,12 @@ function davomatYearName_(yearId) {
   return String(yearId) + ' davomat';
 }
 
+// Prevent a pupil or class name from becoming a spreadsheet formula.
+function davomatSafeName_(value) {
+  const name=String(value===null||value===undefined?'':value);
+  return /^[=+\-@]/.test(name) ? "'" + name : name;
+}
+
 function davomatSymbol_(status) {
   if (status === ATTENDANCE_STATUS.KELDI) return '+';
   if (status === ATTENDANCE_STATUS.SABABLI) return 's';
@@ -564,8 +570,8 @@ function davomatBuildYearSheet_(yearId, attendanceRows, overwrite) {
   const roster = Object.keys(ids).map(id => {
     const st = byId[id] || {};
     const record = sampleById[id];
-    const classId = classIdKey_(st.class_id || (record && record.class_id));
-    return {id:id, name:String(st.full_name || 'ID ' + id), className:classNames[classId] || classId};
+    const classId = classIdKey_((record && record.class_id) || st.class_id);
+    return {id:id, name:davomatSafeName_(st.full_name || 'ID ' + id), className:davomatSafeName_(classNames[classId] || classId)};
   }).sort((a,b)=>a.className.localeCompare(b.className) || a.name.localeCompare(b.name));
   const dates = Array.from(new Set(data.map(r=>statisticsDateKey_(r.date)))).filter(d=>/^\d{4}-\d{2}-\d{2}$/.test(d)).sort();
   const datesIndex = {}; dates.forEach((d,i)=>datesIndex[d]=i+3);
@@ -626,10 +632,10 @@ function davomatReadDay_(classId, date) {
   const values=sheet.getRange(2,index+4,count,1).getValues();
   const byStudent={};
   ids.forEach((row,i)=>{
-    const symbol=String(values[i][0]||'').trim();
+    const symbol=String(values[i][0]||'').trim().toLowerCase();
     if(symbol==='+') byStudent[String(row[0])]=ATTENDANCE_STATUS.KELDI;
     if(symbol==='s') byStudent[String(row[0])]=ATTENDANCE_STATUS.SABABLI;
-    if(symbol==='-') byStudent[String(row[0])]=ATTENDANCE_STATUS.SABABSIZ;
+    if(symbol==='-' || symbol==='−' || symbol==='x') byStudent[String(row[0])]=ATTENDANCE_STATUS.SABABSIZ;
   });
   return byStudent;
 }
@@ -657,7 +663,7 @@ function davomatUpdateYearSheet_(yearId, classId, date, saved) {
     const width=Math.max(sheet.getLastColumn(),3);
     davomatEnsureSize_(sheet,sheet.getLastRow()+missing.length,width);
     sheet.getRange(sheet.getLastRow()+1,1,missing.length,3).setValues(missing.map(st=>[
-      String(st.full_name),classes[classIdKey_(st.class_id)] || classIdKey_(st.class_id),String(st.student_id)
+      davomatSafeName_(st.full_name),davomatSafeName_(classes[classIdKey_(st.class_id)] || classIdKey_(st.class_id)),String(st.student_id)
     ]));
     count += missing.length;
     // Whole-row sort preserves past date marks for each person.

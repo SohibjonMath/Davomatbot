@@ -1,63 +1,86 @@
-// Same-origin API proxy for Telegram's Mini App. Telegram identity and
-// school permissions are verified in Apps Script using signed initData.
+// Single API gateway for Telegram Mini App; Telegram identity is verified in Apps Script.
+// The Apps Script deployment URL is public configuration, not a credential.
+const BACKEND_URL = 'https://script.google.com/macros/s/AKfycbziuYcwWMhkJraJS_fXMuFkKrL1UXdcVCSJzIJyhvuMWO6CbjDmtQJcrk0y2fmRY2wzeQ/exec';
+const ACTIONS = new Set(['bootstrap', 'month', 'save']);
+const noCache = { 'Cache-Control': 'no-store' };
+
+function failure(message, status) {
+  return Response.json({ ok: false, error: message }, { status, headers: noCache });
+}
+
+async function forward(body, action) {
+  // A ContentService reply normally redirects to script.googleusercontent.com.
+  // Retry *reads only* if the redirect fails or Google temporarily returns HTML.
+  // Never replay a write after an ambiguous response.
+  const attempts = action === 'save' ? 1 : 2;
+  const payload = JSON.stringify({ ...body, kind: 'fast_app_api' });
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    let upstream;
+    try {
+      upstream = await fetch(BACKEND_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: payload,
+        redirect: 'follow',
+        signal: AbortSignal.timeout(22000)
+      });
+      const raw = await upstream.text();
+      let parsed;
+      try { parsed = JSON.parse(raw); } catch (_) {}
+      if (upstream.ok && parsed && typeof parsed.ok === 'boolean') {
+        return Response.json(parsed, {
+          status: parsed.ok ? 200 : 400,
+          headers: noCache
+        });
+      }
+      // Do not emit raw upstream HTML or Telegram initData into logs.
+      let host = 'unknown';
+      try { host = new URL(upstream.url).hostname; } catch (_) {}
+      console.error('Davomat upstream transport:', JSON.stringify({
+        attempt: attempt + 1,
+        action, status: upstream.status, host,
+        type: upstream.headers.get('content-type') || 'unknown',
+        responseClass: parsed ? 'unexpected-json' : 'not-json'
+      }));
+      if (attempt + 1 === attempts) {
+        return failure(
+          action === 'save'
+            ? 'Javob olinmadi. Qayta saqlashdan oldin davomatni tekşiring.'
+            : 'Davomatni yüklab bo‘lmadi. Qayta ochib ko‘ring.',
+          502
+        );
+      }
+    } catch (error) {
+      console.error('Davomat upstream connection:', JSON.stringify({
+        action, attempt: attempt + 1, kind: error?.name || 'error'
+      }));
+      if (attempt + 1 === attempts) {
+        return failure(
+          action === 'save'
+            ? 'Saqlash javobi olinmadi. Davomatni tekşirib ko‘ring.'
+            : 'Davomat serveri bilan aloqa vaqtincha uzildi.',
+          error?.name === 'TimeoutError' ? 504 : 502
+        );
+      }
+    }
+  }
+  return failure('Davomat serveri vaqtincha işlamayapti.', 502);
+}
+
 export default async function handler(request) {
-  // Temporary read-only transport diagnostic. An invalid identity is used,
-  // so Apps Script cannot read or write anyone's attendance data.
-  if(request.method==='GET' && new URL(request.url).searchParams.has('transport-check')) {
-    const backend='https://script.google.com/macros/s/AKfycbziuYcwWMhkJraJS_fXMuFkKrL1UXdcVCSJzIJyhvuMWO6CbjDmtQJcrk0y2fmRY2wzeQ/exec';
-    const body=JSON.stringify({kind:'fast_app_api',action:'bootstrap',initData:'invalid-diagnostic'});
-    const check=async (contentType)=>{
-      try {
-        const response=await fetch(backend,{method:'POST',headers:{'content-type':contentType},body,redirect:'follow',signal:AbortSignal.timeout(20000)});
-        const text=await response.text();
-        let parsed=null;
-        try{parsed=JSON.parse(text);}catch(_error){}
-        const hostname=new URL(response.url).hostname;
-        return {status:response.status,contentType:response.headers.get('content-type')||'',finalHost:hostname,
-          json:!!parsed, applicationResponse:!!parsed && typeof parsed.ok==='boolean',
-          htmlLogin:/accounts\.google\.com|signin|sign in|login/i.test(text.slice(0,3000)),
-          htmlError:/<html|<!doctype/i.test(text.slice(0,300)),
-          sample:parsed?{ok:parsed.ok,error:parsed.error}:text.replace(/<[^>]*>/g,' ').replace(/\s+/g,' ').slice(0,160)};
-      }catch(error){return {networkError:error?.name||'Error',message:String(error?.message||'').slice(0,100)};}
-    };
-    const result={json:await check('application/json;charset=UTF-8'),plain:await check('text/plain;charset=utf-8')};
-    return Response.json({ok:true,diagnostic:result},{headers:{'Cache-Control':'no-store'}});
-  }
-  if (request.method !== 'POST') {
-    return Response.json({ok:false,error:'Faqat POST qabul qilinadi.'},{status:405});
-  }
-  // Public Apps Script deployment URL; identity is verified by signed Telegram initData.
-  const backend = 'https://script.google.com/macros/s/AKfycbziuYcwWMhkJraJS_fXMuFkKrL1UXdcVCSJzIJyhvuMWO6CbjDmtQJcrk0y2fmRY2wzeQ/exec';
-  if (!backend || !/^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec(?:\?.*)?$/.test(backend)) {
-    return Response.json({ok:false,error:'Davomat serveri hali sozlanmagan.'},{status:503});
-  }
+  if (request.method !== 'POST') return failure('Bu amal mavjud emas.', 405);
   try {
-    const text=await request.text();
-    if(text.length>150000)return Response.json({ok:false,error:'So‘rov hajmi katta.'},{status:413});
-    const body=JSON.parse(text);
-    if(!body||!['bootstrap','month','save'].includes(body.action)) {
-      return Response.json({ok:false,error:'Noto‘g‘ri amal.'},{status:400});
+    const text = await request.text();
+    if (text.length > 150000) return failure('So‘rov hajmi juda katta.', 413);
+    const body = JSON.parse(text);
+    if (!body || !ACTIONS.has(body.action) || typeof body.initData !== 'string') {
+      return failure('Ma’lumot noto‘g‘ri yuborildi.', 400);
     }
-    // One backend call per data load/save; never proxy each UI button press.
-    const upstream=await fetch(backend,{
-      method:'POST',
-      headers:{'content-type':'application/json;charset=UTF-8'},
-      body:JSON.stringify({...body,kind:'fast_app_api'}),
-      redirect:'follow',
-      signal:AbortSignal.timeout(25000)
-    });
-    if(!upstream.ok)return Response.json({ok:false,error:'Davomat serveri javob bermadi.'},{status:502});
-    const raw=await upstream.text();
-    let result;
-    try{result=JSON.parse(raw);}catch(_error){
-      return Response.json({ok:false,error:'Davomat serveridan noto‘g‘ri javob olindi.'},{status:502});
-    }
-    return Response.json(result,{status:result.ok?200:400,headers:{'Cache-Control':'no-store'}});
-  } catch(error) {
-    const timedOut=error?.name==='TimeoutError';
-    return Response.json({ok:false,error:timedOut?'Server javobi kechikdi. Qayta urinib ko‘ring.':'Server bilan bog‘lanib bo‘lmadi.'},{
-      status:504,headers:{'Cache-Control':'no-store'}
-    });
+    return await forward(body, body.action);
+  } catch (error) {
+    console.error('Davomat proxy request:', error?.name || 'error');
+    return failure('So‘rovni bajarib bo‘lmadi.', 400);
   }
 }
-export const config={path:'/api/attendance'};
+
+export const config = { path: '/api/attendance' };

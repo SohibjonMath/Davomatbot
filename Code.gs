@@ -46,7 +46,7 @@ var _ssMemo = null, _sheetMemo = {}, _headMemo = {}, _rowMemo = {};
 function resetRequestCache_() { _ssMemo=null; _sheetMemo={}; _headMemo={}; _rowMemo={}; }
 function invalidateSheet_(name) {
   delete _rowMemo[name]; delete _headMemo[name];
-  try { CacheService.getScriptCache().remove('davomat:v3:' + name); } catch (_error) {}
+  try { CacheService.getScriptCache().remove('davomat:v4:' + name); } catch (_error) {}
 }
 
 
@@ -80,7 +80,7 @@ function getHeaders_(name) {
 
 function getRowsAsObjects_(name) {
   if (_rowMemo[name]) return _rowMemo[name];
-  const shared = name !== SHEETS.ATTENDANCE, key = 'davomat:v3:' + name;
+  const shared = name !== SHEETS.ATTENDANCE, key = 'davomat:v4:' + name;
   if (shared) {
     try { const cached = CacheService.getScriptCache().get(key);
       if (cached) return _rowMemo[name] = JSON.parse(cached);

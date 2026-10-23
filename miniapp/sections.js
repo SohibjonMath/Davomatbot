@@ -327,14 +327,50 @@
       '<div class="sectionList">'+(list||empty('Admin topilmadi.'))+'</div></div>';
   }
   function renderSettings(data) {
-    const n=data.notifications||{};
-    const list='<div class="sectionItem"><div class="details"><strong>Davomat eslatmasi</strong><small>'+
-      (n.enabled?'Yoqilgan':'Öchirilgan')+' · Har kuni '+esc(n.time||'08:00')+'</small></div>'+
-      '<div class="actions">'+btn(n.enabled?'Öchirish':'Yoqish','settings.toggle','data-enabled="'+(!n.enabled)+'"')+'</div></div>';
-    const input='<div class="sectionToolbar"><label>Bildirişnoma vaqti: <input id="sectionNotifyTime" type="time" value="'+esc(n.time||'08:00')+'"></label>'+
-      btn('Vaqtni saqlaş','settings.time','','accent')+'</div>';
+    const n=data.notifications||{},mode=n.mode||'off';
+    const options=[['off','Kerak emas'],['once','Kuniga bir marta'],['repeat','Davomatgacha takrorlansin']]
+      .map(([value,title])=>'<option value="'+value+'"'+(mode===value?' selected':'')+'>'+esc(title)+'</option>').join('');
+    const intervals=[[1,'Har daqiqada'],[2,'Har 2 daqiqada'],[3,'Har 3 daqiqada'],
+      [5,'Har 5 daqiqada'],[10,'Har 10 daqiqada'],[15,'Har 15 daqiqada'],
+      [20,'Har 20 daqiqada'],[30,'Har 30 daqiqada'],[60,'Har soatda']]
+      .map(([value,title])=>'<option value="'+value+'"'+(Number(n.interval||15)===value?' selected':'')+
+        '>'+esc(title)+'</option>').join('');
+    const repeat=mode==='repeat',off=mode==='off';
+    const optionsForm='<div class="reminderFields">'+
+      '<label class="reminderField"><span>Eslatma rejimi</span><select id="reminderMode">'+options+'</select></label>'+
+      '<label class="reminderField" data-when-enabled '+(off?'hidden':'')+'><span>Birinchi eslatma</span>'+
+        '<input id="reminderStart" type="time" value="'+esc(n.time||'08:00')+'"></label>'+
+      '<label class="reminderField" data-repeat-only '+(!repeat?'hidden':'')+'><span>Takrorlash</span>'+
+        '<select id="reminderInterval">'+intervals+'</select></label>'+
+      '<label class="reminderField" data-repeat-only '+(!repeat?'hidden':'')+'><span>Oxirgi vaqt</span>'+
+        '<input id="reminderEnd" type="time" value="'+esc(n.endTime||'12:00')+'"></label>'+
+      '</div>';
+    const note='<p class="sectionReminderNote" id="reminderExplanation"></p>';
+    const pause=mode==='off'?'':btn(n.mutedToday?'Bugungi eslatmalarni yoqish':'Bugun eslatmasin',
+      n.mutedToday?'settings.resume':'settings.mute','','') ;
     $('sectionPanel').innerHTML='<div class="card">'+heading('settings')+
-      (data.className?'<p class="small">Sinf: '+esc(data.className)+'</p>':'')+list+input+'</div>';
+      (data.className?'<p class="small muted">Sinf: '+esc(data.className)+'</p>':'')+
+      '<p class="small muted">Eslatmalar har bir o‘qituvchi uchun alohida saqlanadi.</p>'+
+      optionsForm+note+
+      '<div class="sectionToolbar">'+btn('Sozlamani saqlash','settings.save','','accent')+pause+'</div>'+
+      '<div class="sectionReminderInfo">Faqat o‘qish kunlari yuboriladi. Davomat to‘liq saqlangach, shu kungi eslatmalar avtomatik to‘xtaydi.'+
+      ' Xabarning tagida davomat va sozlamalar tugmalari bo‘ladi.</div></div>';
+    updateReminderVisibility();
+  }
+  function updateReminderVisibility() {
+    const mode=$('reminderMode')?.value||'off';
+    document.querySelectorAll('[data-when-enabled]').forEach(el=>{el.hidden=mode==='off';});
+    document.querySelectorAll('[data-repeat-only]').forEach(el=>{el.hidden=mode!=='repeat';});
+    const status=$('reminderExplanation');
+    if(!status)return;
+    if(mode==='off')status.textContent='Eslatmalar yuborilmaydi.';
+    else if(mode==='once')status.textContent='Har o‘qish kuni ko‘rsatilgan vaqtdan boshlab bir marta eslatadi — agar davomat hali to‘liq bo‘lmasa.';
+    else {
+      const interval=Number($('reminderInterval')?.value||15);
+      status.textContent='Davomat to‘liq berilguncha, tanlangan vaqt oralig‘ida har '+interval+
+        ' daqiqada eslatadi.'+(interval===1?
+          ' Har daqiqalik rejim ko‘proq server resursi ishlatadi va xabar vaqti biroz kechikishi mumkin.':'');
+    }
   }
 
   async function handleClick(event) {
@@ -420,10 +456,24 @@
     ],'admin.add');
     if(action==='admin.remove')return confirmAction('Admin ruxsatini bekor qilish',button.dataset.name+' adminlikdan chiqariladi.',
       'admin.remove',{id},page);
-    if(action==='settings.toggle')return mutate('settings.save',{enabled:button.dataset.enabled==='true'},page);
-    if(action==='settings.time')return mutate('settings.save',{time:$('sectionNotifyTime').value},page);
+    if(action==='settings.save') {
+      const mode=$('reminderMode')?.value||'off';
+      const time=$('reminderStart')?.value||'08:00',endTime=$('reminderEnd')?.value||'12:00';
+      const interval=Number($('reminderInterval')?.value||15);
+      if(mode==='repeat'&&endTime<=time){
+        message('Tugash vaqti boshlanishdan keyin bo‘lishi kerak.',true);
+        return;
+      }
+      return mutate('settings.save',{mode,time,endTime,interval},page);
+    }
+    if(action==='settings.mute')return mutate('settings.muteToday',{},page);
+    if(action==='settings.resume')return mutate('settings.resumeToday',{},page);
   }
   function handleChange(event) {
+    if(['reminderMode','reminderInterval','reminderStart','reminderEnd'].includes(event.target.id)){
+      updateReminderVisibility();
+      return;
+    }
     if(event.target.id==='sectionClass') {
       store.studentClass=event.target.value;store.studentSearch='';
       renderStudents(store.cache.get('students'));

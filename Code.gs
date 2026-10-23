@@ -864,7 +864,8 @@ function attendanceCalendarView_(actor, classId, yearMonth) {
     else if(!school)marker='⏸';
     else if(day>today)marker='⏳';
     else {
-      marker=selected.has(day)?'☑':mark[day]&&mark[day].saved?'✅':'○';
+      marker=selected.has(day)?'☑':mark[day]&&mark[day].saved?
+        (mark[day].saved>=mark[day].total?'✅':'◐'):'○';
       callback=multi?'att:pick:'+classIdKey_(classId)+':'+day:'att:day:'+classIdKey_(classId)+':'+day;
     }
     cells.push({text:marker+day.slice(8)+' '+names[weekDay],callback_data:callback});
@@ -886,7 +887,7 @@ function attendanceCalendarView_(actor, classId, yearMonth) {
   return {
     text:String(classRow.class_name)+' — '+month+'\n'+
       'Öquv yili: '+yearStart+' — '+yearEnd+'\n\n'+
-      '✅ Davomat berilgan   ○ Berilmagan\n'+
+      '✅ Berilgan   ◐ Chala   ○ Berilmagan\n'+
       '⏸ Dam olish   ⛔ Ta’til   ⏳ Kelajak   ☑ Tanlangan'+note,
     replyMarkup:buildInlineKeyboard_(rows)
   };
@@ -964,7 +965,6 @@ function davomatUpdateYearSheetBatch_(yearId,classId,dates,saved) {
 function attendanceBulkFormView_(actor,classId) {
   const data=attendanceBulkValidate_(actor,classId,attendanceBulkGet_(actor,classId));
   const students=listActiveStudentsByClass_(classId);
-  const idMap={};students.forEach(st=>{idMap[String(st.student_id)]=true;});
   if(!data.entries) {
     data.entries=students.map(st=>({studentId:Number(st.student_id),fullName:String(st.full_name),status:ATTENDANCE_STATUS.KELDI}));
   } else {
@@ -992,13 +992,18 @@ function attendanceBulkEdit_(actor,classId,action,studentId,mode) {
   const nextMode=data.mode===ATTENDANCE_STATUS.SABABLI?ATTENDANCE_STATUS.SABABLI:ATTENDANCE_STATUS.SABABSIZ;
   if(action==='mode') {
     if([ATTENDANCE_STATUS.SABABLI,ATTENDANCE_STATUS.SABABSIZ].indexOf(mode)<0)throw new Error('Rejim noto‘g‘ri.');
+    if(nextMode===mode)return false;
     data.mode=mode;
-  } else if(action==='all')data.entries=data.entries.map(e=>Object.assign({},e,{status:ATTENDANCE_STATUS.KELDI}));
+  } else if(action==='all') {
+    if(data.entries.every(e=>e.status===ATTENDANCE_STATUS.KELDI))return false;
+    data.entries=data.entries.map(e=>Object.assign({},e,{status:ATTENDANCE_STATUS.KELDI}));
+  }
   else if(action==='mark') {
     if(!data.entries.some(e=>String(e.studentId)===String(studentId)))throw new Error('Öquvchi topilmadi.');
     data.entries=applyAttendanceModeToEntries_(data.entries,studentId,nextMode);
   } else throw new Error('Amal topilmadi.');
   attendanceBulkPut_(actor,classId,data);
+  return true;
 }
 function attendanceBulkReviewView_(actor,classId) {
   const data=attendanceBulkValidate_(actor,classId,attendanceBulkGet_(actor,classId));
@@ -2779,10 +2784,12 @@ function handleCallback_(callbackQuery, actor, alreadyAnswered) {
       if(messageId)editMessage_(chatId,messageId,view.text,view.replyMarkup);
       else sendMessage_(chatId,view.text,view.replyMarkup);
     } else if (p[0] === 'att' && ['bmark','bmode','ball'].indexOf(p[1])>=0) {
-      attendanceBulkEdit_(actor,p[2],p[1]==='bmark'?'mark':p[1]==='bmode'?'mode':'all',p[3],p[3]);
-      const view=attendanceBulkFormView_(actor,p[2]);
-      if(messageId)editMessage_(chatId,messageId,view.text,view.replyMarkup);
-      else sendMessage_(chatId,view.text,view.replyMarkup);
+      const changed=attendanceBulkEdit_(actor,p[2],p[1]==='bmark'?'mark':p[1]==='bmode'?'mode':'all',p[3],p[3]);
+      if(changed) {
+        const view=attendanceBulkFormView_(actor,p[2]);
+        if(messageId)editMessageReplyMarkup_(chatId,messageId,view.replyMarkup);
+        else sendMessage_(chatId,view.text,view.replyMarkup);
+      }
     } else if (p[0] === 'att' && p[1] === 'breview') {
       const view=attendanceBulkReviewView_(actor,p[2]);
       if(messageId)editMessage_(chatId,messageId,view.text,view.replyMarkup);

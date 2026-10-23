@@ -265,11 +265,18 @@
   }
   function renderClasses(data) {
     const rows=(data.items||[]).map(c=>{
-      const note=c.students+' ta öquvçi'+(c.teacher?' · '+c.teacher:' · Rahbar biriktirilmagan');
-      return '<div class="sectionItem '+(c.teacher?'tone-done':'tone-unassigned')+'"><div class="details"><strong>'+esc(c.name)+'</strong>'+
+      const assigned=Boolean(c.teacherId);
+      const teacher=assigned ? (c.teacher||('Telegram ID: '+c.teacherId)):'Rahbar biriktirilmagan';
+      const note=c.students+' ta öquvçi · '+teacher;
+      const teacherButtons=btn(assigned?'Almashtirish':'Rahbar biriktirish','class.teacher.assign',
+          'data-id="'+esc(c.id)+'"',assigned?'':'accent')+
+        (assigned?btn('Rahbarni olib tashlash','class.teacher.remove',
+          'data-id="'+esc(c.id)+'"','danger'):'');
+      return '<div class="sectionItem '+(assigned?'tone-done':'tone-unassigned')+'"><div class="details"><strong>'+esc(c.name)+'</strong>'+
         '<small>'+esc(note)+'</small></div><div class="actions">'+
-        btn('Tahrir','class.rename','data-id="'+esc(c.id)+'"')+
-        btn('Arxivlash','class.remove','data-id="'+esc(c.id)+'"','danger')+'</div></div>';
+        teacherButtons+
+        btn('Sinf nomi','class.rename','data-id="'+esc(c.id)+'"')+
+        btn('Sinfni arxivlash','class.remove','data-id="'+esc(c.id)+'"','danger')+'</div></div>';
     }).join('');
     $('sectionPanel').innerHTML='<div class="card">'+heading('classes',btn('Sinf qoşish','class.add','','accent'))+
       '<div class="sectionList">'+(rows||empty('Sinflar topilmadi.'))+'</div></div>';
@@ -354,6 +361,23 @@
     if(action==='class.rename') {
       const record=datum.items.find(v=>v.id===id);
       return modalAction('Sinf nomini özgartirish',[{name:'name',label:'Sinf nomi',value:record?.name}],'class.rename',{classId:id});
+    }
+    if(action==='class.teacher.assign') {
+      const record=datum?.items.find(v=>v.id===id);
+      if(!record)return;
+      return modalAction(record.teacherId?'Sinf rahbarini almashtirish':'Sinf rahbarini biriktirish',[
+        {name:'id',label:'Yangi rahbarning Telegram IDsi',placeholder:'123456789'},
+        {name:'name',label:'Ism familiya (mavjud rahbar uchun ixtiyoriy)',required:false,
+          placeholder:'Aliyev Sardor'}
+      ],'class.teacher.assign',{classId:id,expectedTeacherId:record.teacherId||''},page);
+    }
+    if(action==='class.teacher.remove') {
+      const record=datum?.items.find(v=>v.id===id);
+      if(!record||!record.teacherId)return;
+      return confirmAction('Sinf rahbarini olib tashlash',
+        record.name+' sinfining rahbari '+(record.teacher||record.teacherId)+
+        ' sinfdan chiqariladi va davomatga kirish huquqi bekor qilinadi. Öquvchilar hamda eski davomat saqlanadi.',
+        'class.teacher.remove',{classId:id,expectedTeacherId:record.teacherId},page);
     }
     if(action==='class.remove')return confirmAction('Sinfni arxivlash','Sinf faolligi bekor qilinadi. Davomat tarixi saqlanib qoladi.',
       'class.remove',{classId:id},page);

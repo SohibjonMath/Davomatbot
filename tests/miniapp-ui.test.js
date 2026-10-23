@@ -1,0 +1,24 @@
+const fs = require('fs');
+const assert = require('assert');
+
+const html = fs.readFileSync('miniapp/index.html','utf8');
+const code = fs.readFileSync('Code.gs','utf8');
+const proxy = fs.readFileSync('netlify/functions/attendance.mjs','utf8');
+const script = html.match(/<script>\s*([\s\S]*?)\s*<\/script>/)?.[1];
+assert(script,'one inline frontend script is required');
+assert.doesNotThrow(()=>new Function(script),'frontend JavaScript must compile');
+assert.doesNotThrow(()=>new Function(code),'Apps Script source must compile as JS');
+assert(script.includes("button.addEventListener('click',()=>toggleDate(day))"),'date clicks must be local');
+assert(script.includes("button.addEventListener('click',()=>{"),'student controls must be local');
+assert(script.includes("states.querySelectorAll('button')"),'status controls must update without a request');
+assert(script.includes("api('bootstrap')"),'one initial data request is required');
+assert(script.includes("api('month'"),'month data should be loaded once');
+assert(script.includes("api('save'"),'one batch save is required');
+assert(script.includes('S.monthCache'),'month cache required');
+assert(script.includes("initData=tg?.initData"),'do not trust user IDs from query parameters');
+assert(code.includes('fastAppParseInitData_'),'API must authenticate users');
+assert(code.includes('fastAppActor_(body.initData)'),'every server action must authenticate');
+assert(code.includes("menu_button:{type:'web_app'"),'native Telegram menu button required');
+assert(proxy.includes("Netlify.env.get('DAVOMAT_GAS_URL')"),'backend URL must not be bundled into client HTML');
+assert(!html.includes('DAVOMAT_GAS_URL'),'backend should not leak into page');
+console.log('Fast attendance frontend structure and API integration passed');

@@ -4,7 +4,8 @@ export default async function handler(request) {
   if (request.method !== 'POST') {
     return Response.json({ok:false,error:'Faqat POST qabul qilinadi.'},{status:405});
   }
-  const backend = Netlify.env.get('DAVOMAT_GAS_URL');
+  // Public Apps Script deployment URL; identity is verified by signed Telegram initData.
+  const backend = 'https://script.google.com/macros/s/AKfycbziuYcwWMhkJraJS_fXMuFkKrL1UXdcVCSJzIJyhvuMWO6CbjDmtQJcrk0y2fmRY2wzeQ/exec';
   if (!backend || !/^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec(?:\?.*)?$/.test(backend)) {
     return Response.json({ok:false,error:'Davomat serveri hali sozlanmagan.'},{status:503});
   }

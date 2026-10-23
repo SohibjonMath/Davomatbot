@@ -2444,17 +2444,29 @@ function fastAppParseInitData_(raw) {
     fields[key]=value;
   });
   if(!/^[0-9a-f]{64}$/i.test(fields.hash||''))throw new Error('Telegram tasdiği topilmadi.');
-  const source=Object.keys(fields).filter(key=>key!=='hash'&&key!=='signature')
-    .sort().map(key=>key+'='+fields[key]).join('\n');
+  // Telegram may send an extra Ed25519 "signature" parameter.
+  // The bot-token HMAC covers every field except "hash"; accept the
+  // signature-free canonical form for clients using the third-party format.
+  // Both forms still require a valid HMAC using this bot's secret token.
+  const sortedKeys=Object.keys(fields).filter(key=>key!=='hash').sort();
+  const standard=sortedKeys.map(key=>key+'='+fields[key]).join('\n');
   const secret=Utilities.computeHmacSha256Signature(getTelegramToken_(),'WebAppData');
-  // Apps Script supports (String, String) or (Byte[], Byte[]), not (String, Byte[]).
-  // Keep the raw binary HMAC key required by Telegram; encode the payload as UTF-8 bytes.
-  const bytes=Utilities.computeHmacSha256Signature(Utilities.newBlob(source,'text/plain').getBytes(),secret);
-  const actual=bytes.map(byte=>('0'+(byte&255).toString(16)).slice(-2)).join('');
   const expected=String(fields.hash).toLowerCase();
-  let difference=actual.length^expected.length;
-  for(let i=0;i<actual.length;i++)difference|=actual.charCodeAt(i)^expected.charCodeAt(i);
-  if(difference)throw new Error('Telegram tasdiği yaroqsiz.');
+  function validHmac_(checkString) {
+    // Always pass Byte[], Byte[]: Apps Script rejects mixed HMAC types.
+    const bytes=Utilities.computeHmacSha256Signature(
+      Utilities.newBlob(checkString,'text/plain').getBytes(),secret
+    );
+    const actual=bytes.map(byte=>('0'+(byte&255).toString(16)).slice(-2)).join('');
+    let difference=actual.length^expected.length;
+    for(let i=0;i<actual.length;i++)difference|=actual.charCodeAt(i)^expected.charCodeAt(i);
+    return difference===0;
+  }
+  const signed=validHmac_(standard);
+  const other=fields.signature
+    ?validHmac_(sortedKeys.filter(key=>key!=='signature')
+      .map(key=>key+'='+fields[key]).join('\n')):false;
+  if(!signed && !other)throw new Error('Telegram tasdiği yaroqsiz.');
   const issued=Number(fields.auth_date),now=Math.floor(Date.now()/1000);
   if(!Number.isInteger(issued)||issued>now+60||now-issued>86400)
     throw new Error('Sessiya eskirgan. Ilovani Telegramdan qayta oching.');
@@ -2462,6 +2474,16 @@ function fastAppParseInitData_(raw) {
   try { user=JSON.parse(fields.user||'{}'); } catch(_error) { throw new Error('Telegram foydalanuvchisi topilmadi.'); }
   if(!/^\d+$/.test(String(user.id||'')))throw new Error('Telegram foydalanuvchisi topilmadi.');
   return user;
+}
+// Run from Apps Script's editor when BotFather opens a Mini App but the
+// signed initData is rejected. Returns only public bot identity, never token.
+function checkDavomatBotIdentity() {
+  const info=telegramCall_('getMe',{});
+  return {
+    username:'@'+String(info.username||''),
+    expected:'@imi_davomat_bot',
+    correctBot:String(info.username||'').toLowerCase()==='imi_davomat_bot'
+  };
 }
 function fastAppActor_(initData) {
   const user=fastAppParseInitData_(initData);

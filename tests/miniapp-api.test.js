@@ -68,7 +68,9 @@ const month=fn('fastAppApi_')({action:'month',initData:data,classId:'5',month:'2
 assert.strictEqual(month.dates['2026-10-15']['2'],'SABABLI');
 assert.throws(()=>fn('fastAppApi_')({action:'month',initData:data,classId:'6',month:'2026-10'}),/Ruxsat/);
 assert.throws(()=>fn('fastAppApi_')({action:'save',initData:data,classId:'6',dates:['2026-10-15'],entries:[]}),/Ruxsat/);
-assert.throws(()=>fn('fastAppParseInitData_')(data.replace('user%3D','user%3D2')),/tasdi/i);
+const tampered=new URLSearchParams(data);
+tampered.set('query_id','altered');
+assert.throws(()=>fn('fastAppParseInitData_')(tampered.toString()),/tasdi/i);
 const parsed=new URLSearchParams(data);
 parsed.set('user',JSON.stringify({id:200}));
 assert.throws(()=>fn('fastAppParseInitData_')(parsed.toString()),/tasdi/i);

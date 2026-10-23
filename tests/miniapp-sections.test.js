@@ -4,11 +4,12 @@ const assert=require('assert');
 const code=fs.readFileSync('Code.gs','utf8');
 const html=fs.readFileSync('miniapp/index.html','utf8');
 const sections=fs.readFileSync('miniapp/sections.js','utf8');
+const app=fs.readFileSync('miniapp/app.js','utf8');
 const proxy=fs.readFileSync('netlify/functions/attendance.mjs','utf8');
 
 assert.doesNotThrow(()=>new Function(code));
 assert.doesNotThrow(()=>new Function(sections));
-assert.doesNotThrow(()=>new Function(html.match(/<script>\s*([\s\S]*?)\s*<\/script>/)[1]));
+assert.doesNotThrow(()=>new Function(app));
 assert(html.includes('id="sectionPanel"')&&html.includes('/sections.js'));
 for(const page of ['statistics','classes','students','year','calendar','admins','settings']){
   assert(sections.includes(page),'Missing Mini App section '+page);
@@ -35,9 +36,9 @@ ctx.getNotificationSettings_=()=> ({enabled:true,time:'08:00'});
 
 const call=name=>vm.runInContext(name,ctx);
 const roles=[
-  {role:'SUPER_ADMIN',telegramId:'900',buttons:8},
-  {role:'ADMIN',telegramId:'500',buttons:7},
-  {role:'TEACHER',telegramId:'400',classId:'4',buttons:3}
+  {role:'SUPER_ADMIN',telegramId:'900',buttons:10},
+  {role:'ADMIN',telegramId:'500',buttons:9},
+  {role:'TEACHER',telegramId:'400',classId:'4',buttons:4}
 ];
 for(const actor of roles){
   const menu=call('buildMainMenu_')(actor);
@@ -48,17 +49,18 @@ for(const actor of roles){
     assert(item.web_app.url.startsWith('https://davomat-imi.netlify.app/?page='),
       'All menu items must directly open the correct Mini App URL');
   }
-  for(const page of call('fastAppPages_')(actor).filter(x=>x!=='attendance')){
+  for(const page of call('fastAppPages_')(actor).filter(x=>x!=='attendance'&&x!=='history')){
     const response=call('fastAppSection_')(actor,page);
     assert.strictEqual(response.page,page);
   }
 }
 assert(call('buildMainMenu_')({role:'UNASSIGNED'}).keyboard,'Unassigned users need claim flow');
 const teacher=roles[2];
-for(const page of ['statistics','classes','year','calendar','admins']){
+for(const page of ['statistics','control','classes','year','calendar','admins']){
   assert.throws(()=>call('fastAppSection_')(teacher,page),/Ruxsat/);
 }
 assert.throws(()=>call('fastAppManage_')(teacher,'admin.add',{id:'8',name:'Test'}),/Ruxsat/);
+assert(call('fastAppPages_')(roles[1]).includes('control'),'Admins can monitor class teachers');
 assert(proxy.includes("'section', 'manage'"),'Netlify proxy must support all sections');
 assert(proxy.includes("action === 'manage'"),'Mutations must not be retried after ambiguous results');
 console.log('All Mini App section routes, roles and authenticated inline buttons passed');

@@ -2406,6 +2406,134 @@ function diagnoseDavomatOne() {
 }
 
 
+
+// ===== FastDavomatApi.gs =====
+// A single gateway request from the Telegram Mini App replaces dozens of
+// slow bot callbacks. Every action authenticates signed Telegram initData.
+function fastAppParseInitData_(raw) {
+  if (typeof raw !== 'string' || !raw || raw.length > 8192) throw new Error('Telegram orqali kiring.');
+  const fields={};
+  raw.split('&').forEach(part=>{
+    const pos=part.indexOf('=');
+    if(pos<1)return;
+    const decode=v=>decodeURIComponent(String(v).replace(/\+/g,' '));
+    const key=decode(part.slice(0,pos)),value=decode(part.slice(pos+1));
+    if(Object.prototype.hasOwnProperty.call(fields,key))throw new Error('Tasdiqlash xatosi.');
+    fields[key]=value;
+  });
+  if(!/^[0-9a-f]{64}$/i.test(fields.hash||''))throw new Error('Telegram tasdiği topilmadi.');
+  const source=Object.keys(fields).filter(key=>key!=='hash'&&key!=='signature')
+    .sort().map(key=>key+'='+fields[key]).join('\n');
+  const secret=Utilities.computeHmacSha256Signature(getTelegramToken_(),'WebAppData');
+  const bytes=Utilities.computeHmacSha256Signature(source,secret);
+  const actual=bytes.map(byte=>('0'+(byte&255).toString(16)).slice(-2)).join('');
+  const expected=String(fields.hash).toLowerCase();
+  let difference=actual.length^expected.length;
+  for(let i=0;i<actual.length;i++)difference|=actual.charCodeAt(i)^expected.charCodeAt(i);
+  if(difference)throw new Error('Telegram tasdiği yaroqsiz.');
+  const issued=Number(fields.auth_date),now=Math.floor(Date.now()/1000);
+  if(!Number.isInteger(issued)||issued>now+60||now-issued>86400)
+    throw new Error('Sessiya eskirgan. Ilovani Telegramdan qayta oching.');
+  let user;
+  try { user=JSON.parse(fields.user||'{}'); } catch(_error) { throw new Error('Telegram foydalanuvchisi topilmadi.'); }
+  if(!/^\d+$/.test(String(user.id||'')))throw new Error('Telegram foydalanuvchisi topilmadi.');
+  return user;
+}
+function fastAppActor_(initData) {
+  const user=fastAppParseInitData_(initData);
+  const actor=resolveActor_(user.id);
+  if(!actor||actor.role===ROLES.UNASSIGNED||actor.active===false)
+    throw new Error('Bu davomatga ruxsat yo‘q.');
+  return actor;
+}
+function fastAppAllowedClasses_(actor) {
+  return listActiveClasses_().filter(row=>canAccessClass_(actor,row.class_id));
+}
+function fastAppYear_(actor) {
+  const y=getActiveAcademicYear_();
+  if(!y)throw new Error('Faol o‘quv yili topilmadi.');
+  return {id:String(y.year_id),start:statisticsDateKey_(y.start_date),end:statisticsDateKey_(y.end_date)};
+}
+function fastAppBootstrap_(actor) {
+  const classes=fastAppAllowedClasses_(actor);
+  const year=fastAppYear_(actor);
+  return {
+    today:todayKey_(),year:year,
+    classes:classes.map(row=>({id:classIdKey_(row.class_id),name:String(row.class_name)})),
+    students:getRowsAsObjects_(SHEETS.STUDENTS)
+      .filter(row=>isActiveFlag_(row.active)&&classes.some(cls=>sameClassId_(cls.class_id,row.class_id)))
+      .map(row=>({id:Number(row.student_id),name:String(row.full_name),classId:classIdKey_(row.class_id)})),
+    holidays:getRowsAsObjects_(SHEETS.CALENDAR).filter(row=>isActiveFlag_(row.active)).map(row=>({
+      from:statisticsDateKey_(row.start_date),to:statisticsDateKey_(row.end_date),type:String(row.type)
+    }))
+  };
+}
+function fastAppMonth_(actor,classId,month) {
+  if(!canAccessClass_(actor,classId))throw new Error('Ruxsat yo‘q.');
+  const year=fastAppYear_(actor),monthKey=attendanceMonthKey_(month);
+  if(monthKey<year.start.slice(0,7)||monthKey>year.end.slice(0,7))
+    throw new Error('Sana öquv yilidan taşqarida.');
+  const students=listActiveStudentsByClass_(classId),allowed=new Set(students.map(row=>String(row.student_id)));
+  const result={},from=monthKey+'-01',to=attendanceShiftMonth_(monthKey,1)+'-01';
+  // The year sheet has a narrow monthly slice. If missing, read the raw log.
+  const ss=getSpreadsheet_(),yearSheet=ss.getSheetByName(davomatYearName_(year.id));
+  let found=false;
+  if(yearSheet&&yearSheet.getLastRow()>1&&yearSheet.getLastColumn()>3) {
+    const heads=yearSheet.getRange(1,4,1,yearSheet.getLastColumn()-3).getDisplayValues()[0];
+    const indices=[];
+    heads.forEach((day,i)=>{const key=statisticsDateKey_(day);
+      if(key>=from&&key<to)indices.push({date:key,column:i+4});
+    });
+    if(indices.length) {
+      found=true;
+      const count=yearSheet.getLastRow()-1,rawIds=yearSheet.getRange(2,3,count,1).getValues();
+      const startCol=indices[0].column,endCol=indices[indices.length-1].column;
+      const matrix=yearSheet.getRange(2,startCol,count,endCol-startCol+1).getValues();
+      indices.forEach(col=>{
+        const values={};
+        rawIds.forEach((row,i)=>{
+          const id=String(row[0]);if(!allowed.has(id))return;
+          const mark=String(matrix[i][col.column-startCol]||'').trim().toLowerCase();
+          if(mark==='+')values[id]='KELDI';
+          else if(mark==='s')values[id]='SABABLI';
+          else if(mark==='-'||mark==='−'||mark==='x')values[id]='SABABSIZ';
+        });
+        if(Object.keys(values).length)result[col.date]=values;
+      });
+    }
+  }
+  // Reconciliation from authoritative raw log also handles incomplete projections.
+  if(!found) {
+    getRowsAsObjects_(SHEETS.ATTENDANCE).forEach(row=>{
+      const day=statisticsDateKey_(row.date),id=String(row.student_id);
+      if(day>=from&&day<to&&sameClassId_(row.class_id,classId)&&allowed.has(id)) {
+        if(!result[day])result[day]={};
+        result[day][id]=String(row.status);
+      }
+    });
+  }
+  return {month:monthKey,classId:classIdKey_(classId),dates:result};
+}
+function fastAppSave_(actor,classId,dates,entries) {
+  if(!canAccessClass_(actor,classId))throw new Error('Ruxsat yo‘q.');
+  if(!Array.isArray(dates)||!dates.length||dates.length>25||
+      dates.some(date=>!/^\d{4}-\d{2}-\d{2}$/.test(String(date))))throw new Error('Sana noto‘g‘ri.');
+  if(!Array.isArray(entries)||entries.length>250)throw new Error('Öquvchilar soni noto‘g‘ri.');
+  const result=saveAttendanceMany_(actor,classId,dates,entries);
+  return {dates:result.dates,summary:attendanceSummary_(result.saved),savedAt:new Date().toISOString()};
+}
+function fastAppApi_(body) {
+  const actor=fastAppActor_(body.initData);
+  if(body.action==='bootstrap')return fastAppBootstrap_(actor);
+  if(body.action==='month')return fastAppMonth_(actor,String(body.classId||''),String(body.month||''));
+  if(body.action==='save')return fastAppSave_(actor,String(body.classId||''),body.dates,body.entries);
+  throw new Error('Amal topilmadi.');
+}
+function fastAppJson_(value) {
+  return ContentService.createTextOutput(JSON.stringify(value))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
 // ===== Code.gs =====
 
 function todayKey_() {
@@ -2418,12 +2546,18 @@ function safeOutput_() {
 
 function doPost(e) {
   resetRequestCache_();
+  let update={};
   try {
-    const raw = e && e.postData && e.postData.contents ? e.postData.contents : '{}';
-    const update = JSON.parse(raw);
+    const raw=e&&e.postData&&e.postData.contents?e.postData.contents:'{}';
+    if(raw.length>180000)throw new Error('So‘rov juda katta.');
+    update=JSON.parse(raw);
+    if(update&&update.kind==='fast_app_api') {
+      try {return fastAppJson_({ok:true,data:fastAppApi_(update)});}
+      catch(error){return fastAppJson_({ok:false,error:error&&error.message?error.message:'Saqlanmadi.'});}
+    }
     routeUpdate_(update);
-  } catch (error) {
-    console.error('DavomatOne webhook error:', error && error.message ? error.message : error);
+  } catch(error) {
+    console.error('DavomatOne webhook error:',error&&error.message?error.message:error);
   }
   return safeOutput_();
 }

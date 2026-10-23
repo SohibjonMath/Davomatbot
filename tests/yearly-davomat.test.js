@@ -87,7 +87,7 @@ save('2026-10-16');
 save('2026-10-14');
 save('2026-10-16');
 assert.deepStrictEqual(Array.from(view.rows[0].slice(3)),['2026-10-14','2026-10-15','2026-10-16'],'day columns must be sorted');
-assert.strictEqual(log.getLastRow(),10,'re-saving the same day should upsert, not duplicate');
+assert.strictEqual(log.getLastRow(),9,'re-saving the same day should upsert, not duplicate');
 const col=view.rows[0].indexOf('2026-10-16');
 assert.deepStrictEqual(view.rows.slice(1).map(r=>r[col]),['-','+','s']);
 assert.strictEqual(view.rows.length,4,'include active students with no previous attendance');

@@ -735,11 +735,11 @@ function attendanceBulkToggle_(actor,classId,date) {
   if(!canAccessClass_(actor,classId))throw new Error('Ruxsat yo‘q.');
   attendanceEditableDate_(date);
   const data=attendanceBulkGet_(actor,classId);
-  if(!data||data.stage!=='pick'||date.slice(0,7)!==data.month)throw new Error('Sanalarni qayta tanlang.');
-  const set=new Set(data.dates);
-  if(set.has(date))set.delete(date);else set.add(date);
-  if(set.size>25)throw new Error('Bir martada 25 tagacha sana tanlash mumkin.');
-  data.dates=Array.from(set).sort();
+  if(!data||data.stage!=='pick')throw new Error('Sanalarni qayta tanlang.');
+  const selected=new Set(data.dates);
+  if(selected.has(date))selected.delete(date);else selected.add(date);
+  if(selected.size>25)throw new Error('Bir martada 25 tagacha sana tanlash mumkin.');
+  data.dates=Array.from(selected).sort();
   attendanceBulkPut_(actor,classId,data);
   return data;
 }
@@ -831,38 +831,62 @@ function attendanceMonthDates_(yearMonth, schoolYear, calendarRows, today) {
 
 function attendanceCalendarView_(actor, classId, yearMonth) {
   if (!canAccessClass_(actor,classId)) throw new Error('Ruxsat yo‘q.');
-  const classRow = findRowByValue_(SHEETS.CLASSES,'class_id',classId);
-  if (!classRow || !isActiveFlag_(classRow.active)) throw new Error('Sinf topilmadi.');
-  const year = getActiveAcademicYear_();
-  if (!year) throw new Error('Faol o‘quv yili topilmadi.');
-  const today = todayKey_();
-  const firstMonth = String(year.start_date).slice(0,7);
-  const currentEnd = today < String(year.end_date) ? today : String(year.end_date);
-  const lastMonth = currentEnd.slice(0,7);
-  if (firstMonth > lastMonth) throw new Error('Öquv yili hali boshlanmagan.');
-  const month = attendanceMonthKey_(yearMonth || lastMonth);
-  if (month < firstMonth || month > lastMonth) throw new Error('Bu oyda davomat kiritib bo‘lmaydi.');
-  const days = attendanceMonthDates_(month,year,getRowsAsObjects_(SHEETS.CALENDAR),today);
-  const weekdayNames = ['Ya','Du','Se','Ço','Pa','Ju','Şa'];
-  const rows=[];
-  for(let i=0;i<days.length;i+=5) {
-    rows.push(days.slice(i,i+5).map(day => {
-      const parts = day.split('-').map(Number);
-      const weekday = new Date(Date.UTC(parts[0],parts[1]-1,parts[2])).getUTCDay();
-      return {text:day.slice(8) + ' ' + weekdayNames[weekday],callback_data:'att:day:' + classIdKey_(classId) + ':' + day};
-    }));
+  const classRow=findRowByValue_(SHEETS.CLASSES,'class_id',classId);
+  if(!classRow||!isActiveFlag_(classRow.active))throw new Error('Sinf topilmadi.');
+  const year=getActiveAcademicYear_();
+  if(!year)throw new Error('Faol o‘quv yili topilmadi.');
+  const today=todayKey_();
+  const yearStart=statisticsDateKey_(year.start_date),yearEnd=statisticsDateKey_(year.end_date);
+  const firstMonth=yearStart.slice(0,7),lastMonth=(today<yearEnd?today:yearEnd).slice(0,7);
+  if(firstMonth>lastMonth)throw new Error('Öquv yili hali boshlanmagan.');
+  const month=attendanceMonthKey_(yearMonth||lastMonth);
+  if(month<firstMonth||month>lastMonth)throw new Error('Bu oyda davomat kiritib bo‘lmaydi.');
+  const calendar=getRowsAsObjects_(SHEETS.CALENDAR);
+  const mark=attendanceMonthStatus_(classId,month);
+  const bulk=attendanceBulkGet_(actor,classId),multi=bulk&&bulk.stage==='pick';
+  const selected=new Set(multi?bulk.dates:[]);
+  const names=['Ya','Du','Se','Ço','Pa','Ju','Şa'];
+  const nextMonth=attendanceShiftMonth_(month,1);
+  const lastDay=shiftDateKey_(nextMonth+'-01',-1);
+  const cells=[];
+  for(let day=month+'-01';day<=lastDay;day=shiftDateKey_(day,1)) {
+    const parts=day.split('-').map(Number);
+    const weekDay=new Date(Date.UTC(parts[0],parts[1]-1,parts[2])).getUTCDay();
+    const within=day>=yearStart&&day<=yearEnd;
+    const special=calendar.filter(ev=>isActiveFlag_(ev.active)&&day>=statisticsDateKey_(ev.start_date)&&day<=statisticsDateKey_(ev.end_date));
+    const workday=special.some(ev=>String(ev.type)==='WORKDAY');
+    const holiday=!workday&&special.some(ev=>String(ev.type)==='VACATION'||String(ev.type)==='HOLIDAY');
+    const school=within&&!holiday&&(workday||(weekDay>=1&&weekDay<=5));
+    let marker='',callback='att:noop';
+    if(day>today)marker='⏳';
+    else if(!within)marker='—';
+    else if(holiday)marker='⛔';
+    else if(!school)marker='⏸';
+    else {
+      marker=selected.has(day)?'☑':mark[day]&&mark[day].saved?'✅':'○';
+      callback=multi?'att:pick:'+classIdKey_(classId)+':'+day:'att:day:'+classIdKey_(classId)+':'+day;
+    }
+    cells.push({text:marker+day.slice(8)+' '+names[weekDay],callback_data:callback});
   }
+  const rows=[];
+  for(let i=0;i<cells.length;i+=5)rows.push(cells.slice(i,i+5));
   const navigation=[];
-  if(month > firstMonth) navigation.push({text:'◀ Oldingi oy',callback_data:'att:days:'+classIdKey_(classId)+':'+attendanceShiftMonth_(month,-1)});
-  if(month < lastMonth) navigation.push({text:'Keyingi oy ▶',callback_data:'att:days:'+classIdKey_(classId)+':'+attendanceShiftMonth_(month,1)});
-  if(navigation.length) rows.push(navigation);
-  if(days.indexOf(today)>=0) rows.push([{text:'Bugungi davomat',callback_data:'att:day:'+classIdKey_(classId)+':'+today}]);
+  if(month>firstMonth)navigation.push({text:'◀ Oldingi oy',callback_data:'att:days:'+classIdKey_(classId)+':'+attendanceShiftMonth_(month,-1)});
+  if(month<lastMonth)navigation.push({text:'Keyingi oy ▶',callback_data:'att:days:'+classIdKey_(classId)+':'+nextMonth});
+  if(navigation.length)rows.push(navigation);
+  if(multi) {
+    rows.push([{text:'Tanlangan: '+selected.size+' ta • Davomatni belgilash',callback_data:selected.size?'att:bulkform:'+classIdKey_(classId):'att:noop'}]);
+    rows.push([{text:'Bekor qilish',callback_data:'att:cancel:'+classIdKey_(classId)}]);
+  } else {
+    rows.push([{text:'Bir nechta sanani tanlash',callback_data:'att:multi:'+classIdKey_(classId)+':'+month}]);
+  }
+  const note=multi?('\n\nTanlangan kunlar: '+selected.size+' ta (25 tagacha). Tanlash uchun kunlarni bosing.')
+    :'\n\nBir nechta kunga bir xil davomat uchun pastdagi tugmani bosing.';
   return {
-    text:String(classRow.class_name)+' — '+month+'\n\n'+
-      'Öquv yili: '+String(year.start_date)+' — '+String(year.end_date)+'\n'+
-      'Davomat kiritish yoki tahrirlash uchun sanani tanlang.\n'+
-      'Ta’til va dam olish kunlari ko‘rsatilmaydi.'+
-      (days.length?'':'\n\nBu oyda öqish kuni yo‘q.'),
+    text:String(classRow.class_name)+' — '+month+'\n'+
+      'Öquv yili: '+yearStart+' — '+yearEnd+'\n\n'+
+      '✅ Davomat berilgan   ○ Berilmagan\n'+
+      '⏸ Dam olish   ⛔ Ta’til   ⏳ Kelajak   ☑ Tanlangan'+note,
     replyMarkup:buildInlineKeyboard_(rows)
   };
 }
@@ -871,6 +895,132 @@ function showAttendanceCalendar_(chatId, messageId, actor, classId, yearMonth, e
   const view=attendanceCalendarView_(actor,classId,yearMonth);
   if (edit && messageId) editMessage_(chatId,messageId,view.text,view.replyMarkup);
   else sendMessage_(chatId,view.text,view.replyMarkup);
+}
+
+
+// ===== BulkAttendance.gs =====
+// One common attendance draft is deliberately applied only after review.
+function attendanceBulkFormView_(actor,classId) {
+  const data=attendanceBulkValidate_(actor,classId,attendanceBulkGet_(actor,classId));
+  const students=listActiveStudentsByClass_(classId);
+  const idMap={};students.forEach(st=>{idMap[String(st.student_id)]=true;});
+  if(!data.entries) {
+    data.entries=students.map(st=>({studentId:Number(st.student_id),fullName:String(st.full_name),status:ATTENDANCE_STATUS.KELDI}));
+  } else {
+    const previous={};data.entries.forEach(st=>previous[String(st.studentId)]=st.status);
+    data.entries=students.map(st=>({
+      studentId:Number(st.student_id),fullName:String(st.full_name),
+      status:ATTENDANCE_CYCLE.indexOf(previous[String(st.student_id)])>=0?previous[String(st.student_id)]:ATTENDANCE_STATUS.KELDI
+    }));
+  }
+  data.stage='form';
+  attendanceBulkPut_(actor,classId,data);
+  const mode=data.mode===ATTENDANCE_STATUS.SABABLI?ATTENDANCE_STATUS.SABABLI:ATTENDANCE_STATUS.SABABSIZ;
+  const rows=[[{text:(mode===ATTENDANCE_STATUS.SABABSIZ?'✓ ':'')+'Sababsiz',callback_data:'att:bmode:'+classId+':SABABSIZ'},
+               {text:(mode===ATTENDANCE_STATUS.SABABLI?'✓ ':'')+'Sababli',callback_data:'att:bmode:'+classId+':SABABLI'}]];
+  data.entries.forEach(entry=>rows.push([{text:attendanceMarker_(entry.status)+' '+entry.fullName,callback_data:'att:bmark:'+classId+':'+entry.studentId}]));
+  rows.push([{text:'Hammasi keldi',callback_data:'att:ball:'+classId},{text:'Davom etish',callback_data:'att:breview:'+classId}]);
+  rows.push([{text:'Bekor qilish',callback_data:'att:cancel:'+classId}]);
+  return {text:'Ommaviy davomat — '+data.dates.length+' ta sana\n'+data.dates.join(', ')+'\n\n'+
+    'Barcha öquvchilar avval Keldi. Sababli yoki sababsiz rejimini tanlab, kelmaganlarni belgilang.',
+    replyMarkup:buildInlineKeyboard_(rows)};
+}
+function attendanceBulkEdit_(actor,classId,action,studentId,mode) {
+  const data=attendanceBulkValidate_(actor,classId,attendanceBulkGet_(actor,classId));
+  if(data.stage!=='form')throw new Error('Ommaviy davomatni qayta oching.');
+  const nextMode=data.mode===ATTENDANCE_STATUS.SABABLI?ATTENDANCE_STATUS.SABABLI:ATTENDANCE_STATUS.SABABSIZ;
+  if(action==='mode') {
+    if([ATTENDANCE_STATUS.SABABLI,ATTENDANCE_STATUS.SABABSIZ].indexOf(mode)<0)throw new Error('Rejim noto‘g‘ri.');
+    data.mode=mode;
+  } else if(action==='all')data.entries=data.entries.map(e=>Object.assign({},e,{status:ATTENDANCE_STATUS.KELDI}));
+  else if(action==='mark') {
+    if(!data.entries.some(e=>String(e.studentId)===String(studentId)))throw new Error('Öquvchi topilmadi.');
+    data.entries=applyAttendanceModeToEntries_(data.entries,studentId,nextMode);
+  } else throw new Error('Amal topilmadi.');
+  attendanceBulkPut_(actor,classId,data);
+}
+function attendanceBulkReviewView_(actor,classId) {
+  const data=attendanceBulkValidate_(actor,classId,attendanceBulkGet_(actor,classId));
+  if(!Array.isArray(data.entries)||!data.entries.length)throw new Error('Avval davomatni belgilang.');
+  const old=getRowsAsObjects_(SHEETS.ATTENDANCE);
+  const existing=new Set(old.filter(row=>sameClassId_(row.class_id,classId)).map(row=>statisticsDateKey_(row.date)));
+  const replacing=data.dates.filter(date=>existing.has(date));
+  const summary=attendanceSummary_(data.entries);
+  data.stage='review';attendanceBulkPut_(actor,classId,data);
+  const txt='Ommaviy davomat — tasdiqlash\n\n'+data.dates.join(', ')+'\n\n'+
+    'Tanlangan: '+data.dates.length+' kun\n'+
+    'Keldi: '+summary.KELDI+' | Sababli: '+summary.SABABLI+' | Sababsiz: '+summary.SABABSIZ+'\n'+
+    (replacing.length?'\nDiqqat! '+replacing.length+' kunda avval davomat berilgan. Tasdiqlasangiz o‘sha sanalar ham yangilanadi.':'\nDavomat berilmagan sanalar to‘ldiriladi.');
+  return {text:txt,replyMarkup:buildInlineKeyboard_([
+    [{text:'Tasdiqlash va saqlash',callback_data:'att:bcommit:'+classId}],
+    [{text:'Öquvchilarni tahrirlash',callback_data:'att:bulkform:'+classId}],
+    [{text:'Bekor qilish',callback_data:'att:cancel:'+classId}]
+  ])};
+}
+function saveAttendanceMany_(actor,classId,dates,entries) {
+  if(!canAccessClass_(actor,classId))throw new Error('Ruxsat yo‘q.');
+  const classRow=findRowByValue_(SHEETS.CLASSES,'class_id',classId);
+  if(!classRow||!isActiveFlag_(classRow.active))throw new Error('Sinf topilmadi.');
+  const unique=Array.from(new Set(dates||[])).sort();
+  if(!unique.length||unique.length>25||unique.length!==dates.length)throw new Error('Sanalar soni noto‘g‘ri.');
+  const years={};
+  unique.forEach(day=>{years[day]=attendanceEditableDate_(day);});
+  const students=listActiveStudentsByClass_(classId);
+  const byEntry={};(entries||[]).forEach(e=>{byEntry[String(e.studentId)]=e;});
+  const saved=students.map(st=>{
+    const entry=byEntry[String(st.student_id)];
+    return {studentId:Number(st.student_id),fullName:String(st.full_name),
+      status:entry&&ATTENDANCE_CYCLE.indexOf(entry.status)>=0?entry.status:ATTENDANCE_STATUS.KELDI};
+  });
+  if(!saved.length)throw new Error('Sinfda öquvchilar yo‘q.');
+  const lock=LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    const sheet=getSheet_(SHEETS.ATTENDANCE),headers=getHeaders_(SHEETS.ATTENDANCE);
+    const existing=getRowsAsObjects_(SHEETS.ATTENDANCE);
+    const byKey={};
+    existing.forEach(row=>{
+      if(sameClassId_(row.class_id,classId))byKey[statisticsDateKey_(row.date)+'|'+String(row.student_id)]=row;
+    });
+    const now=new Date().toISOString(),updates=[],adds=[];
+    unique.forEach(date=>saved.forEach(st=>{
+      const val={date:date,class_id:classIdKey_(classId),student_id:st.studentId,
+        status:st.status,updated_by:String(actor.telegramId),updated_at:now,
+        academic_year_id:String(years[date].year_id)};
+      const old=byKey[date+'|'+String(st.studentId)];
+      if(old)updates.push({row:old._row,value:val});
+      else adds.push(headers.map(h=>Object.prototype.hasOwnProperty.call(val,h)?val[h]:''));
+    }));
+    updates.sort((a,b)=>a.row-b.row);
+    const statusCol=headers.indexOf('status')+1;
+    const consecutive=statusCol>0&&headers[statusCol]==='updated_by'&&
+      headers[statusCol+1]==='updated_at'&&headers[statusCol+2]==='academic_year_id';
+    if(consecutive) {
+      for(let pos=0;pos<updates.length;) {
+        let end=pos+1;
+        while(end<updates.length&&updates[end].row===updates[end-1].row+1)end++;
+        const part=updates.slice(pos,end);
+        sheet.getRange(part[0].row,statusCol,part.length,4).setValues(
+          part.map(x=>[x.value.status,x.value.updated_by,x.value.updated_at,x.value.academic_year_id]));
+        pos=end;
+      }
+    } else updates.forEach(x=>updateObjectRow_(SHEETS.ATTENDANCE,x.row,x.value));
+    if(adds.length) {
+      const first=sheet.getLastRow()+1;
+      davomatEnsureSize_(sheet,first+adds.length-1,headers.length);
+      sheet.getRange(first,1,adds.length,headers.length).setValues(adds);
+    }
+    invalidateSheet_(SHEETS.ATTENDANCE);
+    davomatBumpRevision_();
+    // Each date's year-sheet column is updated; raw log remains source of truth.
+    unique.forEach(date=>{
+      try {davomatUpdateYearSheet_(String(years[date].year_id),classId,date,saved);}
+      catch(error){console.error('Yillik davomat proyeksiyasi:',date,error&&error.message||error);}
+    });
+  } finally {
+    lock.releaseLock();
+  }
+  return {dates:unique,saved:saved};
 }
 
 // ===== Attendance.gs =====

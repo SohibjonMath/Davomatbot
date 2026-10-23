@@ -189,7 +189,7 @@
     for(const id of ['classSelect','allPresent','multi','clearDates'])$(id).disabled=S.saving;
   }
   function selectMonth(month){
-    if(month<monthKey(S.data.year.start)||month>=monthKey(S.data.today))return;
+    if(month<monthKey(S.data.year.start)||month>monthKey(S.data.today))return;
     S.month=month;drawCalendar();monthData(S.classId,month).catch(()=>{});
   }
   function chooseDate(date){
@@ -278,7 +278,7 @@
   $('classSelect').addEventListener('change',()=>{
     S.classId=$('classSelect').value;
     S.dates=S.page==='attendance'?new Set([S.data.today]):new Set();
-    S.states={};S.dirty=false;S.cache.delete('unused');
+    S.states={};S.dirty=false;
     if(S.page==='attendance')renderToday();else drawCalendar();
     fillRoster();monthData(S.classId,S.month).catch(()=>{});
   });

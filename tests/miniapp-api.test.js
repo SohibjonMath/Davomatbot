@@ -75,6 +75,22 @@ const data=initData(100);
 const user=fn('fastAppParseInitData_')(data);
 assert.strictEqual(String(user.id),'100');
 assert.strictEqual(fn('fastAppParseInitData_')(initData(100,now,'Öquvçi')).first_name,'Öquvçi');
+// Both Bot API forms are accepted only when a correct bot-token HMAC exists.
+function signedWithEd25519Field(includeFieldInHash) {
+  const user=JSON.stringify({id:100,first_name:'Öquvçi'});
+  const signature='sig_dummy_with_=-_and_utf8';
+  const fields={auth_date:String(now),query_id:'xx',user,signature};
+  const pairs=Object.keys(fields).filter(k=>includeFieldInHash||k!=='signature')
+    .sort().map(k=>k+'='+fields[k]).join('\n');
+  const secret=crypto.createHmac('sha256','WebAppData').update(TOKEN).digest();
+  const hash=crypto.createHmac('sha256',secret).update(pairs).digest('hex');
+  return new URLSearchParams({...fields,hash}).toString();
+}
+assert.strictEqual(fn('fastAppParseInitData_')(signedWithEd25519Field(true)).first_name,'Öquvçi');
+assert.strictEqual(fn('fastAppParseInitData_')(signedWithEd25519Field(false)).first_name,'Öquvçi');
+const tamperedSignature=new URLSearchParams(signedWithEd25519Field(true));
+tamperedSignature.set('signature','altered');
+assert.throws(()=>fn('fastAppParseInitData_')(tamperedSignature.toString()),/tasdi/i);
 const loaded=fn('fastAppApi_')({action:'bootstrap',initData:data});
 assert.strictEqual(loaded.classes.length,1,'teachers should only see their own class');
 assert.strictEqual(loaded.classes[0].name,'6-02');

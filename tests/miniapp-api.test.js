@@ -31,10 +31,23 @@ const db = {
     {date:'2026-10-15',class_id:5,student_id:2,status:'SABABLI'}
   ]
 };
-const sign = (value,key) => Array.from(crypto.createHmac('sha256',Buffer.from(key)).update(value).digest());
+// Strictly emulate Apps Script's HMAC overloads. Mixing String and Byte[] throws.
+const sign = (value,key) => {
+  const strings=typeof value==='string' && typeof key==='string';
+  const bytes=Array.isArray(value) && Array.isArray(key);
+  if(!strings && !bytes)throw new TypeError('computeHmacSha256Signature does not accept mixed types');
+  const input=strings?Buffer.from(value,'utf8'):Buffer.from(value.map(v=>v&255));
+  const secret=strings?Buffer.from(key,'utf8'):Buffer.from(key.map(v=>v&255));
+  return Array.from(crypto.createHmac('sha256',secret).update(input).digest(),v=>v>127?v-256:v);
+};
 const ctx = {
   console,Date,JSON,Math,Object,Array,String,Number,Boolean,RegExp,Error,isFinite,parseInt,
-  Utilities:{computeHmacSha256Signature:sign},
+  Utilities:{
+    computeHmacSha256Signature:sign,
+    newBlob: text => ({
+      getBytes: () => Array.from(Buffer.from(text,'utf8'),v=>v>127?v-256:v)
+    })
+  },
   SpreadsheetApp:{},LockService:{}
 };
 vm.createContext(ctx);
@@ -47,12 +60,13 @@ ctx.getActiveAcademicYear_ = () => db.ACADEMIC_YEARS[0];
 ctx.getSpreadsheet_ = () => ({getSheetByName:()=>null});
 ctx.todayKey_ = () => today;
 
-function initData(userId,authDate=now) {
-  const body = 'auth_date='+authDate+'\nquery_id=xx\nuser='+JSON.stringify({id:userId});
+function initData(userId,authDate=now,firstName='') {
+  const user=JSON.stringify(firstName?{id:userId,first_name:firstName}:{id:userId});
+  const body='auth_date='+authDate+'\nquery_id=xx\nuser='+user;
   const secret=crypto.createHmac('sha256','WebAppData').update(TOKEN).digest();
   const hash=crypto.createHmac('sha256',secret).update(body).digest('hex');
   return new URLSearchParams({
-    user:JSON.stringify({id:userId}),
+    user:user,
     query_id:'xx',auth_date:String(authDate),hash
   }).toString();
 }
@@ -60,6 +74,7 @@ const fn=name=>vm.runInContext(name,ctx);
 const data=initData(100);
 const user=fn('fastAppParseInitData_')(data);
 assert.strictEqual(String(user.id),'100');
+assert.strictEqual(fn('fastAppParseInitData_')(initData(100,now,'Öquvçi')).first_name,'Öquvçi');
 const loaded=fn('fastAppApi_')({action:'bootstrap',initData:data});
 assert.strictEqual(loaded.classes.length,1,'teachers should only see their own class');
 assert.strictEqual(loaded.classes[0].name,'6-02');

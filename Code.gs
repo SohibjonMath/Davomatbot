@@ -858,10 +858,10 @@ function attendanceCalendarView_(actor, classId, yearMonth) {
     const holiday=!workday&&special.some(ev=>String(ev.type)==='VACATION'||String(ev.type)==='HOLIDAY');
     const school=within&&!holiday&&(workday||(weekDay>=1&&weekDay<=5));
     let marker='',callback='att:noop';
-    if(day>today)marker='⏳';
-    else if(!within)marker='—';
+    if(!within)marker='—';
     else if(holiday)marker='⛔';
     else if(!school)marker='⏸';
+    else if(day>today)marker='⏳';
     else {
       marker=selected.has(day)?'☑':mark[day]&&mark[day].saved?'✅':'○';
       callback=multi?'att:pick:'+classIdKey_(classId)+':'+day:'att:day:'+classIdKey_(classId)+':'+day;
@@ -897,6 +897,66 @@ function showAttendanceCalendar_(chatId, messageId, actor, classId, yearMonth, e
   else sendMessage_(chatId,view.text,view.replyMarkup);
 }
 
+
+
+// Same-column layout as davomatUpdateYearSheet_ but only one roster read
+// for the entire multi-date save. All class/date boundaries are preserved.
+function davomatUpdateYearSheetBatch_(yearId,classId,dates,saved) {
+  const ss=getSpreadsheet_(), name=davomatYearName_(yearId);
+  let sheet=ss.getSheetByName(name);
+  if(!sheet) {
+    const all=getRowsAsObjects_(SHEETS.ATTENDANCE).filter(row=>davomatYearId_(row.date,row.academic_year_id)===yearId);
+    sheet=davomatBuildYearSheet_(yearId,all,true);
+    const raw=getSheet_(SHEETS.ATTENDANCE);
+    if(!raw.isSheetHidden())raw.hideSheet();
+    return;
+  }
+  const students=getRowsAsObjects_(SHEETS.STUDENTS).filter(row=>isActiveFlag_(row.active));
+  const classNames=davomatClassNames_(yearId),classKey=classIdKey_(classId);
+  let count=sheet.getLastRow()-1;
+  const known=count>0?sheet.getRange(2,3,count,1).getValues():[];
+  const mapped={};
+  known.forEach(row=>{mapped[String(row[0])]=true;});
+  const missing=students.filter(st=>!mapped[String(st.student_id)]);
+  if(missing.length) {
+    const width=Math.max(3,sheet.getLastColumn());
+    davomatEnsureSize_(sheet,sheet.getLastRow()+missing.length,width);
+    sheet.getRange(sheet.getLastRow()+1,1,missing.length,3).setValues(missing.map(st=>[
+      davomatSafeName_(st.full_name),
+      davomatSafeName_(classNames[classIdKey_(st.class_id)]||classIdKey_(st.class_id)),
+      String(st.student_id)
+    ]));
+    count+=missing.length;
+    sheet.getRange(2,1,count,width).sort([{column:2,ascending:true},{column:1,ascending:true}]);
+  }
+  let headers=sheet.getLastColumn()>3?sheet.getRange(1,4,1,sheet.getLastColumn()-3).getDisplayValues()[0].map(String):[];
+  const cols={};
+  dates.slice().sort().forEach(date=>{
+    let index=headers.indexOf(date);
+    if(index<0) {
+      index=headers.findIndex(x=>x && x>date);
+      if(index<0)index=headers.length;
+      const col=index+4;
+      if(index<headers.length)sheet.insertColumnBefore(col);
+      else davomatEnsureSize_(sheet,1,col);
+      sheet.getRange(1,col).setNumberFormat('@').setValue(date).setBackground('#002050').setFontColor('#ffffff').setFontWeight('bold');
+      sheet.setColumnWidth(col,95);
+      headers.splice(index,0,date);
+    }
+    cols[date]=headers.indexOf(date)+4;
+  });
+  if(!count)return;
+  const ids=sheet.getRange(2,3,count,1).getValues().map(row=>String(row[0]));
+  const statuses={};
+  saved.forEach(st=>{statuses[String(st.studentId)]=davomatSymbol_(st.status);});
+  dates.forEach(date=>{
+    const col=cols[date],range=sheet.getRange(2,col,count,1);
+    const values=range.getValues();
+    ids.forEach((id,i)=>{if(Object.prototype.hasOwnProperty.call(statuses,id))values[i][0]=statuses[id];});
+    range.setValues(values);
+    davomatColorDay_(sheet,col,values.map(x=>x[0]));
+  });
+}
 
 // ===== BulkAttendance.gs =====
 // One common attendance draft is deliberately applied only after review.
@@ -1013,10 +1073,11 @@ function saveAttendanceMany_(actor,classId,dates,entries) {
     invalidateSheet_(SHEETS.ATTENDANCE);
     davomatBumpRevision_();
     // Each date's year-sheet column is updated; raw log remains source of truth.
-    unique.forEach(date=>{
-      try {davomatUpdateYearSheet_(String(years[date].year_id),classId,date,saved);}
-      catch(error){console.error('Yillik davomat proyeksiyasi:',date,error&&error.message||error);}
-    });
+    try {
+      davomatUpdateYearSheetBatch_(String(years[unique[0]].year_id),classId,unique,saved);
+    } catch(error) {
+      console.error('Yillik davomat proyeksiyasi:',error&&error.message||error);
+    }
   } finally {
     lock.releaseLock();
   }

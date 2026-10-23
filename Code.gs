@@ -1820,11 +1820,42 @@ function ensureSettingsSheet_() {
   return sheet;
 }
 function normalizeNotificationTime_(value) {
-  const m=/^\s*(\d{1,2}):(\d{2})\s*$/.exec(String(value||''));
+  // Sheets stores cells formatted as Time as Date objects, not "HH:mm" strings.
+  // Cached JSON serializes those dates as ISO; old sheets may have HH:mm:ss or
+  // fractional-day values. Preserve the *local* clock time in all cases.
+  const tz=Session.getScriptTimeZone();
+  if(value instanceof Date) {
+    if(!Number.isFinite(value.getTime()))throw new Error('Vaqt noto‘g‘ri.');
+    return Utilities.formatDate(value,tz,'HH:mm');
+  }
+  if(typeof value==='number'&&Number.isFinite(value)&&value>=0&&value<1) {
+    const minute=Math.round(value*1440)%1440;
+    return String(Math.floor(minute/60)).padStart(2,'0')+':'+
+      String(minute%60).padStart(2,'0');
+  }
+  const raw=String(value==null?'':value).trim();
+  // A date-like ISO string is written by CacheService/JSON.stringify(Date).
+  if(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(raw)) {
+    const date=new Date(raw);
+    if(!Number.isFinite(date.getTime()))throw new Error('Vaqt noto‘g‘ri.');
+    return Utilities.formatDate(date,tz,'HH:mm');
+  }
+  const m=/^(\d{1,2}):(\d{2})(?::\d{2}(?:\.\d+)?)?\s*(AM|PM)?$/i.exec(raw);
   if(!m)throw new Error('Vaqt HH:MM ko‘rinishida bo‘lishi kerak.');
-  const h=Number(m[1]),mm=Number(m[2]);
+  let h=Number(m[1]);const mm=Number(m[2]),ampm=(m[3]||'').toUpperCase();
+  if(ampm&&(h<1||h>12))throw new Error('Vaqt noto‘g‘ri.');
+  if(ampm)h=h%12+(ampm==='PM'?12:0);
   if(h>23||mm>59)throw new Error('Vaqt noto‘g‘ri.');
   return String(h).padStart(2,'0')+':'+String(mm).padStart(2,'0');
+}
+function storedNotificationTime_(value,fallback) {
+  // Do not block the entire Settings screen because one historic cell is dirty.
+  if(value===null||value===undefined||value==='')return fallback;
+  try{return normalizeNotificationTime_(value);}
+  catch(error){
+    console.warn('Eslatma vaqti eski formatda; standart vaqt tanlandi.');
+    return fallback;
+  }
 }
 function notificationMinutes_(value) {
   const p=normalizeNotificationTime_(value).split(':').map(Number);
@@ -1844,8 +1875,8 @@ function notificationInterval_(value) {
 function notificationSettingsFromRow_(row,id) {
   const mode=notificationMode_(row);
   return {telegramId:String(id||row.telegram_id||''),mode:mode,enabled:mode!=='off',
-    time:normalizeNotificationTime_(row.notification_time||'08:00'),
-    endTime:normalizeNotificationTime_(row.reminder_end_time||'12:00'),
+    time:storedNotificationTime_(row.notification_time,'08:00'),
+    endTime:storedNotificationTime_(row.reminder_end_time,'12:00'),
     interval:notificationInterval_(row.reminder_interval_minutes||15),
     lastDate:statisticsDateKey_(row.last_notification_date||''),
     lastSentAt:String(row.reminder_last_sent_at||''),

@@ -2877,7 +2877,9 @@ function fastAppControl_(actor,dateKey) {
    }
    if(page==='settings') {
      const settings=getNotificationSettings_(actor.telegramId);
-     return {page:page,notifications:{enabled:Boolean(settings.enabled),time:String(settings.time||'08:00')},
+     return {page:page,notifications:{enabled:Boolean(settings.enabled),mode:settings.mode,
+         time:settings.time,endTime:settings.endTime,interval:settings.interval,
+         mutedToday:settings.mutedDate===todayKey_()},
        className:actor.role===ROLES.TEACHER
          ?String((findRowByValue_(SHEETS.CLASSES,'class_id',actor.classId)||{}).class_name||''):'',
        role:actor.role};
@@ -2911,9 +2913,20 @@ function fastAppControl_(actor,dateKey) {
    if(op==='year.activate')return initializeCurrentAcademicYear_(actor,String(body.yearId||''));
    if(op==='settings.save') {
      const next={};
-     if(Object.prototype.hasOwnProperty.call(body,'enabled'))next.enabled=body.enabled===true;
-     if(Object.prototype.hasOwnProperty.call(body,'time'))next.time=normalizeNotificationTime_(body.time);
-     return saveNotificationSettings_(actor.telegramId,next);
+     for(const key of ['enabled','mode','time','endTime','interval']) {
+       if(Object.prototype.hasOwnProperty.call(body,key))next[key]=body[key];
+     }
+     const saved=saveNotificationSettings_(actor.telegramId,next);
+     try {ensureNotificationTrigger_();}catch(error){
+       console.error('Eslatma triggerini yangilash:',error&&error.message||error);
+     }
+     return saved;
+   }
+   if(op==='settings.muteToday') {
+     return saveNotificationSettings_(actor.telegramId,{mutedDate:todayKey_()});
+   }
+   if(op==='settings.resumeToday') {
+     return saveNotificationSettings_(actor.telegramId,{mutedDate:''});
    }
    throw new Error('Bunday amal mavjud emas.');
  }
@@ -3467,10 +3480,15 @@ function handleCallback_(callbackQuery, actor, alreadyAnswered) {
       showRangeTopAbsences_(chatId,actor);
     } else if (data === 'stats:range:days') {
       showRangeDays_(chatId,actor);
+    } else if (data === 'rem:mute') {
+      if(actor.role!==ROLES.TEACHER&&actor.role!==ROLES.ADMIN&&actor.role!==ROLES.SUPER_ADMIN)
+        throw new Error('Ruxsat yo‘q.');
+      saveNotificationSettings_(actor.telegramId,{mutedDate:todayKey_()});
+      if(messageId) editMessage_(chatId,messageId,'Bugungi eslatmalar to‘xtatildi. Davomatni hali topshirmagan bo‘lsangiz, uni belgilash esdan chiqmasin.',notificationMenu_(actor.role));
     } else if (data === 'notify:toggle') {
       const current = getNotificationSettings_(actor.telegramId);
-      const next = saveNotificationSettings_(actor.telegramId,{enabled:!current.enabled});
-      if (next.enabled) ensureNotificationTrigger_();
+      saveNotificationSettings_(actor.telegramId,{enabled:!current.enabled});
+      try{ensureNotificationTrigger_();}catch(_error){}
       showSettings_(chatId,actor);
     } else if (data === 'notify:time') {
       setPendingAction_(actor.telegramId,{type:'SET_NOTIFICATION_TIME'});

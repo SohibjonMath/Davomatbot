@@ -30,6 +30,7 @@ const database={
   CLASS_HISTORY:[],CALENDAR:[],_DAVOMAT_BAZA:[]
 };
 ctx.getRowsAsObjects_=name=>database[name]||[];
+ctx.getSpreadsheet_=()=>({getSheetByName:()=>null});
 ctx.todayKey_=()=> '2026-10-23';
 ctx.getSuperAdminId_=()=> '900';
 ctx.getNotificationSettings_=()=> ({enabled:true,time:'08:00'});

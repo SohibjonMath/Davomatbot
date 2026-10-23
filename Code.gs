@@ -1536,6 +1536,8 @@ function enumerateSchoolDaysFromRows_(years, calendarRows, startDate, endDate) {
 // settings. Initialize only an entirely empty year table; never alter any
 // previously configured academic year or its historical records.
 function ensureInitialAcademicYear_() {
+  // In-memory test runners intentionally have no live Spreadsheet service.
+  if (typeof SpreadsheetApp === 'undefined' || typeof LockService === 'undefined') return false;
   if (getRowsAsObjects_(SHEETS.ACADEMIC_YEARS).length) return false;
   const lock = LockService.getScriptLock();
   lock.waitLock(15000);

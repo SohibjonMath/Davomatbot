@@ -2,7 +2,6 @@ const fs=require('fs');
 const vm=require('vm');
 const assert=require('assert');
 const code=fs.readFileSync('Code.gs','utf8');
-const tests=[];
 const nowBase=Date.parse('2026-10-23T02:00:00.000Z'); // 07:00 in Uzbekistan
 let instant=nowBase,schoolDay=true;
 class TestDate extends Date {

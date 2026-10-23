@@ -90,7 +90,13 @@ function getRowsAsObjects_(name) {
   if (!headers.length || sheet.getLastRow()<2) return _rowMemo[name]=[];
   const values=sheet.getRange(2,1,sheet.getLastRow()-1,headers.length).getValues();
   const rows=values.map((values,i)=>{
-    const record={_row:i+2}; headers.forEach((h,j)=>record[h]=values[j]); return record;
+    const record={_row:i+2};
+    headers.forEach((h,j)=>{
+      const val=values[j];
+      record[h]= (h==='date'||h==='start_date'||h==='end_date'||h==='promotion_date'||h==='active_from'||h==='active_to')
+        && val instanceof Date ? Utilities.formatDate(val,Session.getScriptTimeZone(),'yyyy-MM-dd') : val;
+    });
+    return record;
   });
   _rowMemo[name]=rows;
   if(shared) {
@@ -704,18 +710,99 @@ function davomatUpdateYearSheet_(yearId, classId, date, saved) {
 }
 
 
+
+// ===== CalendarStatusAndBulkSelection.gs =====
+function attendanceBulkKey_(actor, classId) {
+  return 'att:bulk:v1:'+String(actor.telegramId)+':'+classIdKey_(classId);
+}
+function attendanceBulkGet_(actor,classId) {
+  const raw=CacheService.getScriptCache().get(attendanceBulkKey_(actor,classId));
+  if(!raw)return null;
+  try { const data=JSON.parse(raw); return data && Array.isArray(data.dates) ? data : null; }
+  catch(_error){return null;}
+}
+function attendanceBulkPut_(actor,classId,data) {
+  CacheService.getScriptCache().put(attendanceBulkKey_(actor,classId),JSON.stringify(data),1800);
+}
+function attendanceBulkClear_(actor,classId) {
+  CacheService.getScriptCache().remove(attendanceBulkKey_(actor,classId));
+}
+function attendanceBulkStart_(actor,classId,month) {
+  if(!canAccessClass_(actor,classId))throw new Error('Ruxsat yo‘q.');
+  attendanceBulkPut_(actor,classId,{month:attendanceMonthKey_(month),dates:[],mode:ATTENDANCE_STATUS.SABABSIZ,entries:null,stage:'pick'});
+}
+function attendanceBulkToggle_(actor,classId,date) {
+  if(!canAccessClass_(actor,classId))throw new Error('Ruxsat yo‘q.');
+  attendanceEditableDate_(date);
+  const data=attendanceBulkGet_(actor,classId);
+  if(!data||data.stage!=='pick'||date.slice(0,7)!==data.month)throw new Error('Sanalarni qayta tanlang.');
+  const set=new Set(data.dates);
+  if(set.has(date))set.delete(date);else set.add(date);
+  if(set.size>25)throw new Error('Bir martada 25 tagacha sana tanlash mumkin.');
+  data.dates=Array.from(set).sort();
+  attendanceBulkPut_(actor,classId,data);
+  return data;
+}
+function attendanceBulkValidate_(actor,classId,data) {
+  if(!canAccessClass_(actor,classId)||!data||!Array.isArray(data.dates)||!data.dates.length||data.dates.length>25)
+    throw new Error('Avval sanalarni tanlang.');
+  if(new Set(data.dates).size!==data.dates.length)throw new Error('Takror sanalar mavjud.');
+  data.dates.forEach(date=>attendanceEditableDate_(date));
+  return data;
+}
+// Counts recorded pupils without counting blank entries as submitted.
+// The annual grid is preferred; raw log is the fallback on pre-migration Sheets.
+function attendanceMonthStatus_(classId,month) {
+  const result={};
+  const sheet=getSpreadsheet_().getSheetByName(davomatYearName_(davomatYearId_(month+'-01')));
+  if(sheet&&sheet.getLastColumn()>=4&&sheet.getLastRow()>1) {
+    const last=sheet.getLastColumn(),head=sheet.getRange(1,4,1,last-3).getDisplayValues()[0];
+    const cols=[];
+    head.forEach((day,i)=>{if(String(day).slice(0,7)===month)cols.push({date:String(day),col:i+4});});
+    if(cols.length) {
+      const count=sheet.getLastRow()-1;
+      const roster=sheet.getRange(2,2,count,2).getValues();
+      const classNames=davomatClassNames_(davomatYearId_(month+'-01'));
+      const wanted=classNames[classIdKey_(classId)]||'';
+      const selected=[];
+      roster.forEach((row,i)=>{if(String(row[0])===wanted)selected.push(i);});
+      if(selected.length) {
+        const range=sheet.getRange(2,cols[0].col,count,cols[cols.length-1].col-cols[0].col+1).getValues();
+        cols.forEach(col=>{
+          let countMarks=0;
+          selected.forEach(row=>{
+            const val=String(range[row][col.col-cols[0].col]||'').trim().toLowerCase();
+            if(val==='+'||val==='-'||val==='s'||val==='x'||val==='−')countMarks++;
+          });
+          if(countMarks)result[col.date]={saved:countMarks,total:selected.length};
+        });
+      }
+      return result;
+    }
+  }
+  getRowsAsObjects_(SHEETS.ATTENDANCE).forEach(row=>{
+    const date=statisticsDateKey_(row.date);
+    if(date.slice(0,7)!==month||!sameClassId_(row.class_id,classId))return;
+    if(!result[date])result[date]={saved:0,total:0};
+    result[date].saved++;
+  });
+  const total=listActiveStudentsByClass_(classId).length;
+  Object.keys(result).forEach(day=>result[day].total=total);
+  return result;
+}
+
 // ===== HistoricalAttendanceCalendar.gs =====
 // Only days in the current academic year up to today can be recorded.
 // The school's VACATION/HOLIDAY/WORKDAY rules remain authoritative.
 function attendanceEditableDate_(dateKey) {
-  const key = String(dateKey || '');
-  if (!validDateKey_(key)) throw new Error('Sana noto‘g‘ri.');
-  const year = getActiveAcademicYear_();
-  if (!year) throw new Error('Faol o‘quv yili topilmadi.');
-  if (key < String(year.start_date).slice(0,10)) throw new Error('O‘quv yili hali boshlanmagan sana.');
-  if (key > todayKey_()) throw new Error('Kelajakdagi davomatni kiritib bo‘lmaydi.');
-  if (key > String(year.end_date).slice(0,10)) throw new Error('O‘quv yilidan tashqari sana.');
-  if (!isSchoolDay_(key)) throw new Error('Bu sana o‘qish kuni emas.');
+  const key=statisticsDateKey_(dateKey);
+  if(!validDateKey_(key))throw new Error('Sana noto‘g‘ri.');
+  const year=getActiveAcademicYear_();
+  if(!year)throw new Error('Faol o‘quv yili topilmadi.');
+  if(key<statisticsDateKey_(year.start_date))throw new Error('O‘quv yili hali boshlanmagan sana.');
+  if(key>todayKey_())throw new Error('Kelajakdagi davomatni kiritib bo‘lmaydi.');
+  if(key>statisticsDateKey_(year.end_date))throw new Error('O‘quv yilidan tashqari sana.');
+  if(!isSchoolDay_(key))throw new Error('Bu sana o‘qish kuni emas.');
   return year;
 }
 
@@ -731,14 +818,15 @@ function attendanceShiftMonth_(yearMonth, months) {
 }
 
 function attendanceMonthDates_(yearMonth, schoolYear, calendarRows, today) {
-  const month = attendanceMonthKey_(yearMonth);
-  const first = month + '-01';
-  const last = shiftDateKey_(attendanceShiftMonth_(month,1) + '-01',-1);
-  const from = first < String(schoolYear.start_date) ? String(schoolYear.start_date) : first;
-  const endBoundary = String(schoolYear.end_date) < String(today) ? String(schoolYear.end_date) : String(today);
-  const to = last < endBoundary ? last : endBoundary;
-  if (from > to) return [];
-  return enumerateDateKeys_(from,to).filter(day => resolveSchoolDayFromRows_([schoolYear],calendarRows,day));
+  const month=attendanceMonthKey_(yearMonth);
+  const first=month+'-01';
+  const last=shiftDateKey_(attendanceShiftMonth_(month,1)+'-01',-1);
+  const start=statisticsDateKey_(schoolYear.start_date),end=statisticsDateKey_(schoolYear.end_date);
+  const from=first<start?start:first;
+  const endBoundary=end<today?end:today;
+  const to=last<endBoundary?last:endBoundary;
+  if(from>to)return [];
+  return enumerateDateKeys_(from,to).filter(day=>resolveSchoolDayFromRows_([schoolYear],calendarRows,day));
 }
 
 function attendanceCalendarView_(actor, classId, yearMonth) {
@@ -1048,7 +1136,7 @@ function statisticsActive_(value) {
 }
 
 function statisticsDateKey_(value) {
-  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  if (value instanceof Date) return Utilities.formatDate(value, Session.getScriptTimeZone(), 'yyyy-MM-dd');
   return String(value || '').slice(0, 10);
 }
 
@@ -1583,24 +1671,22 @@ function validateAcademicYearInput_(input) {
 }
 
 function findAcademicYearForDateFromRows_(years, dateKey) {
-  const key = String(dateKey || '').slice(0,10);
-  return (years || []).find(row => {
-    const start = String(row.start_date || '').slice(0,10);
-    const end = String(row.end_date || '').slice(0,10);
-    return validDateKey_(start) && validDateKey_(end) && key >= start && key <= end;
-  }) || null;
+  const key=statisticsDateKey_(dateKey);
+  return (years||[]).find(row=>{
+    const start=statisticsDateKey_(row.start_date),end=statisticsDateKey_(row.end_date);
+    return validDateKey_(start)&&validDateKey_(end)&&key>=start&&key<=end;
+  })||null;
 }
 
 function resolveSchoolDayFromRows_(years, calendarRows, dateKey) {
-  const key = String(dateKey || '').slice(0,10);
-  if (!validDateKey_(key)) return false;
-  if (!findAcademicYearForDateFromRows_(years || [], key)) return false;
-  const events = (calendarRows || []).filter(row => isActiveFlag_(row.active) && key >= String(row.start_date || '').slice(0,10) && key <= String(row.end_date || '').slice(0,10));
-  if (events.some(row => String(row.type) === 'WORKDAY')) return true;
-  if (events.some(row => String(row.type) === 'VACATION' || String(row.type) === 'HOLIDAY')) return false;
-  const parts = key.split('-').map(Number);
-  const day = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2])).getUTCDay();
-  return day >= 1 && day <= 5;
+  const key=statisticsDateKey_(dateKey);
+  if (!validDateKey_(key) || !findAcademicYearForDateFromRows_(years||[],key)) return false;
+  const events=(calendarRows||[]).filter(row=>isActiveFlag_(row.active)&&key>=statisticsDateKey_(row.start_date)&&key<=statisticsDateKey_(row.end_date));
+  if(events.some(row=>String(row.type)==='WORKDAY'))return true;
+  if(events.some(row=>String(row.type)==='VACATION'||String(row.type)==='HOLIDAY'))return false;
+  const parts=key.split('-').map(Number);
+  const day=new Date(Date.UTC(parts[0],parts[1]-1,parts[2])).getUTCDay();
+  return day>=1&&day<=5;
 }
 
 function enumerateDateKeys_(startDate, endDate) {
@@ -1866,7 +1952,7 @@ function showCurrentAcademicYear_(chatId, actor) {
   if (!canManageClasses_(actor)) throw new Error('Ruxsat yo‘q.');
   const y=getActiveAcademicYear_();
   if(!y) return sendMessage_(chatId,'Hozir faol o‘quv yili yo‘q.');
-  sendMessage_(chatId,String(y.title||y.year_id)+'\nBoshlanish: '+y.start_date+'\nTugash: '+y.end_date+'\nKeyingi bosqich sanasi: '+y.promotion_date);
+  sendMessage_(chatId,String(y.title||y.year_id)+'\nBoshlanish: '+statisticsDateKey_(y.start_date)+'\nTugash: '+statisticsDateKey_(y.end_date)+'\nKeyingi bosqich sanasi: '+statisticsDateKey_(y.promotion_date));
 }
 
 function showAcademicClassStatus_(chatId, actor) {

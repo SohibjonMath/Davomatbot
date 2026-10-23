@@ -2364,11 +2364,11 @@ function installFastDavomatMenu() {
 function buildMainMenu_(actor) {
   let keyboard = [];
   if (actor.role === ROLES.SUPER_ADMIN) {
-    keyboard = [['Davomat','Statistika'],['Sinflar','Öquvçilar'],['O‘quv yili','Taqvim'],['Adminlar','Sozlamalar']];
+    keyboard = [['Davomat','Ötgan sanalar'],['Statistika','Rahbarlar nazorati'],['Sinflar','Öquvçilar'],['O‘quv yili','Taqvim'],['Adminlar','Sozlamalar']];
   } else if (actor.role === ROLES.ADMIN) {
-    keyboard = [['Davomat','Statistika'],['Sinflar','Öquvçilar'],['O‘quv yili','Taqvim'],['Sozlamalar']];
+    keyboard = [['Davomat','Ötgan sanalar'],['Statistika','Rahbarlar nazorati'],['Sinflar','Öquvçilar'],['O‘quv yili','Taqvim'],['Sozlamalar']];
   } else if (actor.role === ROLES.TEACHER) {
-    keyboard = [['Davomat','Öquvçilar'],['Sozlamalar']];
+    keyboard = [['Davomat','Ötgan sanalar'],['Öquvçilar','Sozlamalar']];
   } else if (actor.role === ROLES.UNASSIGNED) {
     keyboard = [['Sinf tanlash']];
   }
@@ -2377,8 +2377,8 @@ function buildMainMenu_(actor) {
   // which our server requires to enforce each school role's permissions.
   const url=getFastDavomatUrl_();
   const pages={
-    'Davomat':'attendance','Bugungi davomat':'attendance',
-    'Statistika':'statistics','Sinflar':'classes','Öquvçilar':'students',
+    'Davomat':'attendance','Ötgan sanalar':'history','Bugungi davomat':'attendance',
+    'Statistika':'statistics','Rahbarlar nazorati':'control','Sinflar':'classes','Öquvçilar':'students',
     'O‘quv yili':'year','Taqvim':'calendar','Adminlar':'admins','Sozlamalar':'settings'
   };
   if(url&&actor.role!==ROLES.UNASSIGNED) {
@@ -2590,19 +2590,85 @@ function fastAppSave_(actor,classId,dates,entries) {
   return {dates:result.dates,summary:attendanceSummary_(result.saved),savedAt:new Date().toISOString()};
 }
 
+
+// Admin-only, per-class leader accountability, using one narrow date column
+// from the readable year view. Never identify "partially submitted" as complete.
+function fastAppControl_(actor,dateKey) {
+  if(!canViewStatistics_(actor))throw new Error('Ruxsat yo‘q.');
+  const date=statisticsDateKey_(dateKey),today=todayKey_();
+  if(!validDateKey_(date)||date>today)throw new Error('Sana noto‘g‘ri.');
+  const years=getRowsAsObjects_(SHEETS.ACADEMIC_YEARS);
+  const year=findAcademicYearForDateFromRows_(years,date);
+  if(!year)throw new Error('Sana öquv yilidan taşqarida.');
+  const classes=listActiveClasses_(),students=getRowsAsObjects_(SHEETS.STUDENTS).filter(row=>isActiveFlag_(row.active));
+  const users=getRowsAsObjects_(SHEETS.USERS);
+  const classMap={};
+  classes.forEach(row=>{classMap[classIdKey_(row.class_id)]={id:classIdKey_(row.class_id),name:String(row.class_name),
+    teacherId:String(row.teacher_telegram_id||''),teacherName:'',
+    total:0,submitted:0,keldi:0,sababli:0,sababsiz:0,lastUpdate:''};});
+  students.forEach(row=>{const key=classIdKey_(row.class_id);if(classMap[key])classMap[key].total++;});
+  const byStudent={};students.forEach(row=>{byStudent[String(row.student_id)]=classIdKey_(row.class_id);});
+  const result={};
+  const yearSheet=getSpreadsheet_().getSheetByName(davomatYearName_(String(year.year_id)));
+  let found=false;
+  if(yearSheet&&yearSheet.getLastColumn()>=4&&yearSheet.getLastRow()>1) {
+    const headers=yearSheet.getRange(1,4,1,yearSheet.getLastColumn()-3).getDisplayValues()[0];
+    const col=headers.findIndex(h=>statisticsDateKey_(h)===date);
+    if(col>=0) {
+      found=true;
+      const count=yearSheet.getLastRow()-1,ids=yearSheet.getRange(2,3,count,1).getValues();
+      const marks=yearSheet.getRange(2,col+4,count,1).getValues();
+      ids.forEach((row,i)=>{
+        const mark=String(marks[i][0]||'').trim().toLowerCase();
+        let status='';
+        if(mark==='+')status='KELDI';
+        else if(mark==='s')status='SABABLI';
+        else if(mark==='-'||mark==='−'||mark==='x')status='SABABSIZ';
+        if(status)result[String(row[0])]=status;
+      });
+    }
+  }
+  if(!found) {
+    // Legacy spreadsheets may not yet have a yearly projection.
+    getRowsAsObjects_(SHEETS.ATTENDANCE).forEach(row=>{
+      if(statisticsDateKey_(row.date)===date)
+        result[String(row.student_id)]=String(row.status);
+    });
+  }
+  Object.keys(result).forEach(id=>{
+    const classId=byStudent[id],cls=classMap[classId],status=result[id];
+    if(!cls||['KELDI','SABABLI','SABABSIZ'].indexOf(status)<0)return;
+    cls.submitted++;cls[status.toLowerCase()]++;
+  });
+  const teachersById={};
+  users.forEach(row=>{if(isActiveFlag_(row.active))teachersById[String(row.telegram_id)]=String(row.full_name||'');});
+  const rows=Object.keys(classMap).map(key=>{
+    const cls=classMap[key];
+    cls.teacherName=teachersById[cls.teacherId]||'Rahbar biriktirilmagan';
+    cls.status=!cls.teacherId?'unassigned':!cls.submitted?'missing':cls.submitted<cls.total?'partial':'done';
+    return cls;
+  }).sort((a,b)=>a.name.localeCompare(b.name));
+  return {page:'control',date:date,schoolDay:resolveSchoolDayFromRows_(years,getRowsAsObjects_(SHEETS.CALENDAR),date),
+    total:rows.length,done:rows.filter(x=>x.status==='done').length,
+    missing:rows.filter(x=>x.status==='missing').length,
+    partial:rows.filter(x=>x.status==='partial').length,
+    unassigned:rows.filter(x=>x.status==='unassigned').length,items:rows};
+}
+
  // ===== FastSections.gs =====
  // All pages use the same validated Telegram identity, class permissions and
  // existing Sheets business rules; the Mini App never receives server secrets.
  function fastAppPages_(actor) {
    if(actor.role===ROLES.SUPER_ADMIN)
-     return ['attendance','statistics','classes','students','year','calendar','admins','settings'];
+     return ['attendance','history','statistics','control','classes','students','year','calendar','admins','settings'];
    if(actor.role===ROLES.ADMIN)
-     return ['attendance','statistics','classes','students','year','calendar','settings'];
-   return ['attendance','students','settings'];
+     return ['attendance','history','statistics','control','classes','students','year','calendar','settings'];
+   return ['attendance','history','students','settings'];
  }
  function fastAppSection_(actor,page,options) {
    if(fastAppPages_(actor).indexOf(page)<0)throw new Error('Bu bo‘limga ruxsat yo‘q.');
    const opts=options||{},today=todayKey_();
+   if(page==='control')return fastAppControl_(actor,String(opts.date||today));
    if(page==='classes') {
      const students=getRowsAsObjects_(SHEETS.STUDENTS).filter(row=>isActiveFlag_(row.active));
      const users=getRowsAsObjects_(SHEETS.USERS);

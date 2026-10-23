@@ -23,8 +23,14 @@
     (subtitle?'<small>'+esc(subtitle)+'</small>':'')+'</div>'+
     (buttons?'<div class="actions">'+buttons+'</div>':'')+'</div>';
   const empty = text => '<div class="sectionEmpty">'+esc(text)+'</div>';
+  const metricTone=name=>{
+    if(/Topşirgan|Berilgan|Davomat bergan|Keldi/i.test(name))return 'tone-done';
+    if(/Bermagan|Rahbarsiz|Davomat bermagan|Sababsiz/i.test(name))return 'tone-missing';
+    if(/Chala|Sababli/i.test(name))return 'tone-partial';
+    return '';
+  };
   const metrics = pairs => '<div class="sectionGrid">'+pairs.map(([name,value])=>
-    '<div class="sectionMetric"><span>'+esc(name)+'</span><strong>'+esc(value)+'</strong></div>').join('')+'</div>';
+    '<div class="sectionMetric '+metricTone(name)+'"><span>'+esc(name)+'</span><strong>'+esc(value)+'</strong></div>').join('')+'</div>';
 
   const store = {
     api:null,bootstrap:null,afterWrite:null,onAttendance:null,page:'attendance',cache:new Map(),
@@ -244,9 +250,13 @@
   }
 
   function renderClasses(data) {
-    const rows=(data.items||[]).map(c=>item(c.name,c.students+' ta öquvçi'+(c.teacher?' · '+c.teacher:' · Rahbar biriktirilmagan'),
-      btn('Tahrir','class.rename','data-id="'+esc(c.id)+'"')+
-      btn('Arxivlash','class.remove','data-id="'+esc(c.id)+'"','danger'))).join('');
+    const rows=(data.items||[]).map(c=>{
+      const note=c.students+' ta öquvçi'+(c.teacher?' · '+c.teacher:' · Rahbar biriktirilmagan');
+      return '<div class="sectionItem '+(c.teacher?'tone-done':'tone-unassigned')+'"><div class="details"><strong>'+esc(c.name)+'</strong>'+
+        '<small>'+esc(note)+'</small></div><div class="actions">'+
+        btn('Tahrir','class.rename','data-id="'+esc(c.id)+'"')+
+        btn('Arxivlash','class.remove','data-id="'+esc(c.id)+'"','danger')+'</div></div>';
+    }).join('');
     $('sectionPanel').innerHTML='<div class="card">'+heading('classes',btn('Sinf qoşish','class.add','','accent'))+
       '<div class="sectionList">'+(rows||empty('Sinflar topilmadi.'))+'</div></div>';
   }
@@ -263,12 +273,15 @@
       '<div class="sectionList" id="sectionStudentList">'+(rows||empty('Öquvçi topilmadi.'))+'</div></div>';
   }
   function renderYears(data) {
-    const years=(data.years||[]).map(y=>item(y.title||y.id,
-      y.start+' — '+y.end+' · Keyingi bosqich: '+y.promotion+' · '+y.status,
-      (y.status!=='ARCHIVED'?btn('Sana','year.promotion','data-id="'+esc(y.id)+'"'):'')+
-      (y.status==='PLANNED'?btn('5-sinf qoşish','year.five','data-id="'+esc(y.id)+'"'):'')+
-      (y.status==='PLANNED'&&store.bootstrap.role==='SUPER_ADMIN'?btn('Faollashtirish','year.activate','data-id="'+esc(y.id)+'"'):'')
-    )).join('');
+    const years=(data.years||[]).map(y=>{
+      const state=y.status==='ACTIVE'?'tone-done':y.status==='PLANNED'?'tone-partial':'tone-muted';
+      const buttons=(y.status!=='ARCHIVED'?btn('Sana','year.promotion','data-id="'+esc(y.id)+'"'):'')+
+        (y.status==='PLANNED'?btn('5-sinf qoşish','year.five','data-id="'+esc(y.id)+'"'):'')+
+        (y.status==='PLANNED'&&store.bootstrap.role==='SUPER_ADMIN'?btn('Faollashtirish','year.activate','data-id="'+esc(y.id)+'"'):'');
+      return '<div class="sectionItem '+state+'"><div class="details"><strong>'+esc(y.title||y.id)+'</strong>'+
+        '<small>'+esc(y.start+' — '+y.end+' · Keyingi bosqich: '+y.promotion+' · '+y.status)+'</small></div>'+
+        '<div class="actions">'+buttons+'</div></div>';
+    }).join('');
     const archives=(data.archive||[]).filter(y=>y.status==='GRADUATED'||y.status==='PROMOTED')
       .map(y=>item(y.className,y.yearId+' · '+y.status)).join('');
     $('sectionPanel').innerHTML='<div class="card">'+heading('year',btn('Yangi yil','year.add','','accent'))+
@@ -277,8 +290,12 @@
   }
   function renderCalendar(data) {
     const names={HOLIDAY:'Dam olish / bayram',VACATION:'Ta’til',WORKDAY:'Öqiş kuni'};
-    const list=(data.items||[]).map(e=>item(e.title,e.start+(e.end===e.start?'':' — '+e.end)+' · '+(names[e.type]||e.type),
-      btn('Olib taşlash','calendar.remove','data-id="'+esc(e.id)+'" data-name="'+esc(e.title)+'"','danger'))).join('');
+    const list=(data.items||[]).map(e=>{
+      const state=e.type==='WORKDAY'?'tone-done':e.type==='VACATION'?'tone-partial':'tone-muted';
+      return '<div class="sectionItem '+state+'"><div class="details"><strong>'+esc(e.title)+'</strong>'+
+        '<small>'+esc(e.start+(e.end===e.start?'':' — '+e.end)+' · '+(names[e.type]||e.type))+'</small></div>'+
+        '<div class="actions">'+btn('Olib taşlash','calendar.remove','data-id="'+esc(e.id)+'" data-name="'+esc(e.title)+'"','danger')+'</div></div>';
+    }).join('');
     $('sectionPanel').innerHTML='<div class="card">'+heading('calendar',btn('Kun qoşish','calendar.add','','accent'))+
       '<div class="sectionList">'+(list||empty('Maxsus kunlar kiritilmagan.'))+'</div></div>';
   }

@@ -7,7 +7,7 @@ const SHEETS = Object.freeze({
   CLASSES: 'CLASSES',
   STUDENTS: 'STUDENTS',
   USERS: 'USERS',
-  ATTENDANCE: 'ATTENDANCE',
+  ATTENDANCE: '_DAVOMAT_BAZA',
   SETTINGS: 'SETTINGS',
   ACADEMIC_YEARS: 'ACADEMIC_YEARS',
   CLASS_HISTORY: 'CLASS_HISTORY',
@@ -41,33 +41,56 @@ const PROPERTY_KEYS = Object.freeze({
 
 
 // ===== Sheets.gs =====
-
-function getSpreadsheet_() {
-  return SpreadsheetApp.openById(SPREADSHEET_ID);
+// Isolate request caches; short shared cache only for small, mostly-read tables.
+var _ssMemo = null, _sheetMemo = {}, _headMemo = {}, _rowMemo = {};
+function resetRequestCache_() { _ssMemo=null; _sheetMemo={}; _headMemo={}; _rowMemo={}; }
+function invalidateSheet_(name) {
+  delete _rowMemo[name]; delete _headMemo[name];
+  try { CacheService.getScriptCache().remove('davomat:v3:' + name); } catch (_error) {}
 }
+
+
+function getSpreadsheet_() { return _ssMemo || (_ssMemo = SpreadsheetApp.openById(SPREADSHEET_ID)); }
 
 function getSheet_(name) {
-  const sheet = getSpreadsheet_().getSheetByName(name);
+  if (_sheetMemo[name]) return _sheetMemo[name];
+  const ss = getSpreadsheet_();
+  let sheet = ss.getSheetByName(name);
+  if (!sheet && name === SHEETS.ATTENDANCE) {
+    sheet = ss.getSheetByName('ATTENDANCE');
+    if (sheet) sheet.setName(name);
+  }
   if (!sheet) throw new Error('Sahifa topilmadi: ' + name);
-  return sheet;
+  return _sheetMemo[name] = sheet;
 }
 
-function getHeaders_(sheetName) {
-  const sheet = getSheet_(sheetName);
-  if (sheet.getLastRow() < 1) return [];
-  return sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+function getHeaders_(name) {
+  if (_headMemo[name]) return _headMemo[name];
+  const sheet = getSheet_(name);
+  return _headMemo[name] = sheet.getLastRow() ? sheet.getRange(1,1,1,sheet.getLastColumn()).getValues()[0] : [];
 }
 
-function getRowsAsObjects_(sheetName) {
-  const sheet = getSheet_(sheetName);
-  const headers = getHeaders_(sheetName);
-  if (!headers.length || sheet.getLastRow() < 2) return [];
-  const values = sheet.getRange(2, 1, sheet.getLastRow() - 1, headers.length).getValues();
-  return values.map((row, index) => {
-    const obj = { _row: index + 2 };
-    headers.forEach((h, i) => obj[h] = row[i]);
-    return obj;
+function getRowsAsObjects_(name) {
+  if (_rowMemo[name]) return _rowMemo[name];
+  const shared = name !== SHEETS.ATTENDANCE, key = 'davomat:v3:' + name;
+  if (shared) {
+    try { const cached = CacheService.getScriptCache().get(key);
+      if (cached) return _rowMemo[name] = JSON.parse(cached);
+    } catch (_error) {}
+  }
+  const sheet=getSheet_(name), headers=getHeaders_(name);
+  if (!headers.length || sheet.getLastRow()<2) return _rowMemo[name]=[];
+  const values=sheet.getRange(2,1,sheet.getLastRow()-1,headers.length).getValues();
+  const rows=values.map((values,i)=>{
+    const record={_row:i+2}; headers.forEach((h,j)=>record[h]=values[j]); return record;
   });
+  _rowMemo[name]=rows;
+  if(shared) {
+    try { const json=JSON.stringify(rows);
+      if(json.length<85000) CacheService.getScriptCache().put(key,json,20);
+    } catch(_error) {}
+  }
+  return rows;
 }
 
 function findRowByValue_(sheetName, columnName, value) {
@@ -91,6 +114,7 @@ function setRowActive_(sheetName, idColumn, id, active) {
   const activeCol = headers.indexOf('active') + 1;
   if (activeCol < 1) throw new Error('active ustuni topilmadi.');
   getSheet_(sheetName).getRange(row._row, activeCol).setValue(Boolean(active));
+  invalidateSheet_(sheetName);
   return true;
 }
 
@@ -98,16 +122,21 @@ function appendObjectRow_(sheetName, obj) {
   const headers = getHeaders_(sheetName);
   const row = headers.map(h => Object.prototype.hasOwnProperty.call(obj, h) ? obj[h] : '');
   getSheet_(sheetName).appendRow(row);
+  invalidateSheet_(sheetName);
   return obj;
 }
 
-function updateObjectRow_(sheetName, rowNumber, updates) {
-  const headers = getHeaders_(sheetName);
-  const sheet = getSheet_(sheetName);
-  Object.keys(updates).forEach(key => {
-    const idx = headers.indexOf(key);
-    if (idx >= 0) sheet.getRange(rowNumber, idx + 1).setValue(updates[key]);
-  });
+function updateObjectRow_(name, rowNumber, updates) {
+  const headers=getHeaders_(name), sheet=getSheet_(name);
+  const columns=Object.keys(updates).map(k=>({col:headers.indexOf(k),value:updates[k]})).filter(x=>x.col>=0);
+  if(!columns.length) return;
+  if(columns.length===1) sheet.getRange(rowNumber,columns[0].col+1).setValue(columns[0].value);
+  else {
+    const first=Math.min.apply(null,columns.map(x=>x.col)), last=Math.max.apply(null,columns.map(x=>x.col));
+    const range=sheet.getRange(rowNumber,first+1,1,last-first+1), values=range.getValues()[0];
+    columns.forEach(x=>{values[x.col-first]=x.value;}); range.setValues([values]);
+  }
+  invalidateSheet_(name);
 }
 
 function listActiveRows_(sheetName) {
@@ -126,7 +155,12 @@ function mergeHeaders_(currentHeaders, expectedHeaders) {
 function ensureSheetSchema_(sheetName, expectedHeaders) {
   const ss = getSpreadsheet_();
   let sheet = ss.getSheetByName(sheetName);
+  if (!sheet && sheetName === SHEETS.ATTENDANCE) {
+    sheet = ss.getSheetByName('ATTENDANCE');
+    if (sheet) sheet.setName(sheetName);
+  }
   if (!sheet) sheet = ss.insertSheet(sheetName);
+  _sheetMemo[sheetName] = sheet;
   const expected = (expectedHeaders || []).slice();
   if (sheet.getLastRow() === 0 || sheet.getLastColumn() === 0) {
     if (expected.length) sheet.getRange(1, 1, 1, expected.length).setValues([expected]);
@@ -1659,6 +1693,7 @@ function safeOutput_() {
 }
 
 function doPost(e) {
+  resetRequestCache_();
   try {
     const raw = e && e.postData && e.postData.contents ? e.postData.contents : '{}';
     const update = JSON.parse(raw);
@@ -1679,8 +1714,10 @@ function routeUpdate_(update) {
     return;
   }
   if (update.callback_query && update.callback_query.from) {
-    const actor = resolveActor_(update.callback_query.from.id);
-    handleCallback_(update.callback_query, actor);
+    let acknowledged=false;
+    try { answerCallback_(update.callback_query.id); acknowledged=true; } catch(_error) {}
+    const actor=resolveActor_(update.callback_query.from.id);
+    handleCallback_(update.callback_query,actor,acknowledged);
   }
 }
 
@@ -1993,11 +2030,11 @@ function parseTelegramPerson_(text) {
   return { telegramId, fullName };
 }
 
-function handleCallback_(callbackQuery, actor) {
+function handleCallback_(callbackQuery, actor, alreadyAnswered) {
   const data = String(callbackQuery.data || '');
   const chatId = callbackQuery.message && callbackQuery.message.chat ? callbackQuery.message.chat.id : actor.telegramId;
   const messageId = callbackQuery.message ? callbackQuery.message.message_id : null;
-  let callbackAnswered = false;
+  let callbackAnswered = Boolean(alreadyAnswered);
   try {
     const p = data.split(':');
     if (p[0] === 'claim' && p[1] === 'class') {
@@ -2013,7 +2050,7 @@ function handleCallback_(callbackQuery, actor) {
     } else if (p[0] === 'att' && p[1] === 'mode') {
       const classId = p[2], date = p[3], mode = p[4];
       if (!canAccessClass_(actor,classId)) throw new Error('Ruxsat yo‘q.');
-      try { answerCallback_(callbackQuery.id); callbackAnswered = true; } catch (_answerError) {}
+      if (!callbackAnswered) { try { answerCallback_(callbackQuery.id); callbackAnswered = true; } catch (_answerError) {} }
       const previous = getAttendanceMode_(actor,classId,date);
       if (previous !== mode) {
         setAttendanceMode_(actor,classId,date,mode);
@@ -2022,13 +2059,13 @@ function handleCallback_(callbackQuery, actor) {
     } else if (p[0] === 'att' && p[1] === 'mark') {
       const classId = p[2], studentId = Number(p[3]), date = p[4];
       if (!canAccessClass_(actor,classId)) throw new Error('Ruxsat yo‘q.');
-      try { answerCallback_(callbackQuery.id); callbackAnswered = true; } catch (_answerError) {}
+      if (!callbackAnswered) { try { answerCallback_(callbackQuery.id); callbackAnswered = true; } catch (_answerError) {} }
       const entries = markAttendanceDraft_(actor,classId,studentId,date);
       editMessageReplyMarkup_(chatId,messageId,buildAttendanceReplyMarkup_(actor,classId,date,entries));
     } else if (p[0] === 'att' && p[1] === 'all') {
       const classId = p[2], date = p[3];
       if (!canAccessClass_(actor,classId)) throw new Error('Ruxsat yo‘q.');
-      try { answerCallback_(callbackQuery.id); callbackAnswered = true; } catch (_answerError) {}
+      if (!callbackAnswered) { try { answerCallback_(callbackQuery.id); callbackAnswered = true; } catch (_answerError) {} }
       const before = getAttendanceDraft_(actor,classId,date);
       if (before.some(item => item.status !== ATTENDANCE_STATUS.KELDI)) {
         const entries = setAllAttendanceKeldi_(actor,classId,date);
@@ -2172,8 +2209,12 @@ function handleCallback_(callbackQuery, actor) {
     }
     if (!callbackAnswered) { try { answerCallback_(callbackQuery.id); } catch (_answerError) {} }
   } catch (error) {
-    try { answerCallback_(callbackQuery.id, error && error.message ? error.message : 'Xatolik.'); }
-    catch (_answerError) { console.error('Callback answer error'); }
+    const message = error && error.message ? error.message : 'Xatolik.';
+    if(callbackAnswered) {
+      try { sendMessage_(chatId,message); } catch(_error) { console.error(message); }
+    } else {
+      try { answerCallback_(callbackQuery.id,message); } catch(_error) { console.error(message); }
+    }
   }
 }
 

@@ -58,7 +58,7 @@
     store.api=api;
     store.afterWrite=afterWrite;
     store.onAttendance=onAttendance;
-    store.allowed=Array.isArray(bootstrap.pages)?bootstrap.pages:['attendance'];
+    store.allowed=Array.isArray(bootstrap.pages)?bootstrap.pages:['attendance','history'];
     $('sectionPanel').addEventListener('click',handleClick);
     $('sectionPanel').addEventListener('change',handleChange);
     $('sectionPanel').addEventListener('input',handleInput);
@@ -422,7 +422,7 @@
 
   function updateBootstrap(bootstrap) {
     store.bootstrap=bootstrap;
-    store.allowed=bootstrap.pages||['attendance'];
+    store.allowed=bootstrap.pages||['attendance','history'];
     store.cache.clear();
   }
   window.DavomatSections={start,show,updateBootstrap};

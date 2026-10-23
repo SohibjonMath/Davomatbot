@@ -703,6 +703,88 @@ function davomatUpdateYearSheet_(yearId, classId, date, saved) {
   davomatColorDay_(sheet,column,values.map(r=>r[0]));
 }
 
+
+// ===== HistoricalAttendanceCalendar.gs =====
+// Only days in the current academic year up to today can be recorded.
+// The school's VACATION/HOLIDAY/WORKDAY rules remain authoritative.
+function attendanceEditableDate_(dateKey) {
+  const key = String(dateKey || '');
+  if (!validDateKey_(key)) throw new Error('Sana noto‘g‘ri.');
+  const year = getActiveAcademicYear_();
+  if (!year) throw new Error('Faol o‘quv yili topilmadi.');
+  if (key < String(year.start_date).slice(0,10)) throw new Error('O‘quv yili hali boshlanmagan sana.');
+  if (key > todayKey_()) throw new Error('Kelajakdagi davomatni kiritib bo‘lmaydi.');
+  if (key > String(year.end_date).slice(0,10)) throw new Error('O‘quv yilidan tashqari sana.');
+  if (!isSchoolDay_(key)) throw new Error('Bu sana o‘qish kuni emas.');
+  return year;
+}
+
+function attendanceMonthKey_(yearMonth) {
+  const key = String(yearMonth || '');
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(key)) throw new Error('Oy noto‘g‘ri.');
+  return key;
+}
+
+function attendanceShiftMonth_(yearMonth, months) {
+  const parts = attendanceMonthKey_(yearMonth).split('-').map(Number);
+  return new Date(Date.UTC(parts[0],parts[1]-1+Number(months),1)).toISOString().slice(0,7);
+}
+
+function attendanceMonthDates_(yearMonth, schoolYear, calendarRows, today) {
+  const month = attendanceMonthKey_(yearMonth);
+  const first = month + '-01';
+  const last = shiftDateKey_(attendanceShiftMonth_(month,1) + '-01',-1);
+  const from = first < String(schoolYear.start_date) ? String(schoolYear.start_date) : first;
+  const endBoundary = String(schoolYear.end_date) < String(today) ? String(schoolYear.end_date) : String(today);
+  const to = last < endBoundary ? last : endBoundary;
+  if (from > to) return [];
+  return enumerateDateKeys_(from,to).filter(day => resolveSchoolDayFromRows_([schoolYear],calendarRows,day));
+}
+
+function attendanceCalendarView_(actor, classId, yearMonth) {
+  if (!canAccessClass_(actor,classId)) throw new Error('Ruxsat yo‘q.');
+  const classRow = findRowByValue_(SHEETS.CLASSES,'class_id',classId);
+  if (!classRow || !isActiveFlag_(classRow.active)) throw new Error('Sinf topilmadi.');
+  const year = getActiveAcademicYear_();
+  if (!year) throw new Error('Faol o‘quv yili topilmadi.');
+  const today = todayKey_();
+  const firstMonth = String(year.start_date).slice(0,7);
+  const currentEnd = today < String(year.end_date) ? today : String(year.end_date);
+  const lastMonth = currentEnd.slice(0,7);
+  if (firstMonth > lastMonth) throw new Error('Öquv yili hali boshlanmagan.');
+  const month = attendanceMonthKey_(yearMonth || lastMonth);
+  if (month < firstMonth || month > lastMonth) throw new Error('Bu oyda davomat kiritib bo‘lmaydi.');
+  const days = attendanceMonthDates_(month,year,getRowsAsObjects_(SHEETS.CALENDAR),today);
+  const weekdayNames = ['Ya','Du','Se','Ço','Pa','Ju','Şa'];
+  const rows=[];
+  for(let i=0;i<days.length;i+=5) {
+    rows.push(days.slice(i,i+5).map(day => {
+      const parts = day.split('-').map(Number);
+      const weekday = new Date(Date.UTC(parts[0],parts[1]-1,parts[2])).getUTCDay();
+      return {text:day.slice(8) + ' ' + weekdayNames[weekday],callback_data:'att:day:' + classIdKey_(classId) + ':' + day};
+    }));
+  }
+  const navigation=[];
+  if(month > firstMonth) navigation.push({text:'◀ Oldingi oy',callback_data:'att:days:'+classIdKey_(classId)+':'+attendanceShiftMonth_(month,-1)});
+  if(month < lastMonth) navigation.push({text:'Keyingi oy ▶',callback_data:'att:days:'+classIdKey_(classId)+':'+attendanceShiftMonth_(month,1)});
+  if(navigation.length) rows.push(navigation);
+  if(days.indexOf(today)>=0) rows.push([{text:'Bugungi davomat',callback_data:'att:day:'+classIdKey_(classId)+':'+today}]);
+  return {
+    text:String(classRow.class_name)+' — '+month+'\n\n'+
+      'Öquv yili: '+String(year.start_date)+' — '+String(year.end_date)+'\n'+
+      'Davomat kiritish yoki tahrirlash uchun sanani tanlang.\n'+
+      'Ta’til va dam olish kunlari ko‘rsatilmaydi.'+
+      (days.length?'':'\n\nBu oyda öqish kuni yo‘q.'),
+    replyMarkup:buildInlineKeyboard_(rows)
+  };
+}
+
+function showAttendanceCalendar_(chatId, messageId, actor, classId, yearMonth, edit) {
+  const view=attendanceCalendarView_(actor,classId,yearMonth);
+  if (edit && messageId) editMessage_(chatId,messageId,view.text,view.replyMarkup);
+  else sendMessage_(chatId,view.text,view.replyMarkup);
+}
+
 // ===== Attendance.gs =====
 
 function normalizeDateKey_(date) {
@@ -741,8 +823,7 @@ function saveAttendance_(actor, classId, date, entries) {
   const classRow = findRowByValue_(SHEETS.CLASSES, 'class_id', classId);
   if (!classRow || !isActiveFlag_(classRow.active)) throw new Error('Sinf topilmadi.');
   const dateKey = normalizeDateKey_(date);
-  if (!isSchoolDay_(dateKey)) throw new Error('Bu sana o‘qish kuni emas.');
-  const year = findAcademicYearForDateFromRows_(getRowsAsObjects_(SHEETS.ACADEMIC_YEARS), dateKey);
+  const year = attendanceEditableDate_(dateKey);
   if (!year || String(year.status).toUpperCase() !== 'ACTIVE') throw new Error('Bu o‘quv yili faollashtirilmagan.');
   const students = listActiveRows_(SHEETS.STUDENTS).filter(row => sameClassId_(row.class_id, classId));
   const input = {};
@@ -823,6 +904,7 @@ function attendanceDraftKey_(telegramId, classId, date) {
 }
 
 function getAttendanceDraft_(actor, classId, date) {
+  attendanceEditableDate_(String(date));
   const key = attendanceDraftKey_(actor.telegramId, classId, date);
   const raw = CacheService.getScriptCache().get(key);
   if (raw) {
@@ -861,6 +943,7 @@ function getAttendanceMode_(actor, classId, date) {
 }
 
 function setAttendanceMode_(actor, classId, date, mode) {
+  attendanceEditableDate_(String(date));
   const next = mode === ATTENDANCE_STATUS.SABABLI ? ATTENDANCE_STATUS.SABABLI : ATTENDANCE_STATUS.SABABSIZ;
   CacheService.getScriptCache().put(attendanceModeKey_(actor.telegramId, classId, date), next, 1800);
   return next;
@@ -913,6 +996,7 @@ function buildAttendanceReplyMarkup_(actor, classId, date, entries) {
     {text:'Hammasi keldi', callback_data:'att:all:' + classId + ':' + dateKey},
     {text:'Saqlash', callback_data:'att:save:' + classId + ':' + dateKey}
   ]);
+  rows.push([{text:'Boshqa sana',callback_data:'att:days:' + classId + ':' + dateKey.slice(0,7)}]);
   return buildInlineKeyboard_(rows);
 }
 
@@ -1956,7 +2040,7 @@ function buildMainMenu_(actor) {
   } else if (actor.role === ROLES.ADMIN) {
     keyboard = [['Davomat','Statistika'],['Sinflar','Öquvçilar'],['O‘quv yili','Taqvim'],['Sozlamalar']];
   } else if (actor.role === ROLES.TEACHER) {
-    keyboard = [['Bugungi davomat','Öquvçilar'],['Oldingi davomatlar','Sozlamalar']];
+    keyboard = [['Bugungi davomat','Öquvçilar'],['Sana tanlash','Sozlamalar']];
   } else if (actor.role === ROLES.UNASSIGNED) {
     keyboard = [['Sinf tanlash']];
   }
@@ -2102,7 +2186,7 @@ function classChoiceKeyboard_(prefix, includeHistory) {
     if (includeHistory) {
       return [
         { text:String(row.class_name), callback_data:prefix + ':' + classId },
-        { text:'Oldingi', callback_data:'hist:class:' + classId }
+        { text:'Sanalar', callback_data:'hist:class:' + classId }
       ];
     }
     return [{ text:String(row.class_name), callback_data:prefix + ':' + classId }];
@@ -2111,11 +2195,12 @@ function classChoiceKeyboard_(prefix, includeHistory) {
 }
 
 function showAttendanceForClass_(chatId, messageId, actor, classId, date, edit) {
-  const dateKey = normalizeDateKey_(date || todayKey_());
+  const dateKey = String(date || todayKey_());
   if (dateKey === todayKey_() && !isSchoolDay_(dateKey)) {
-    sendMessage_(chatId, 'Bugun o‘qish kuni emas.');
+    showAttendanceCalendar_(chatId,messageId,actor,classId,null,edit);
     return;
   }
+  attendanceEditableDate_(dateKey);
   const view = buildAttendanceView_(actor, classId, dateKey);
   if (edit && messageId) editMessage_(chatId, messageId, view.text, view.replyMarkup);
   else sendMessage_(chatId, view.text, view.replyMarkup);
@@ -2235,18 +2320,9 @@ function showTeacherSettings_(chatId, actor) {
 }
 
 function showHistory_(chatId, actor, classId) {
-  if (!canAccessClass_(actor, classId)) throw new Error('Ruxsat yo‘q.');
-  const dates = [];
-  getRowsAsObjects_(SHEETS.ATTENDANCE)
-    .filter(row => sameClassId_(row.class_id, classId))
-    .forEach(row => { const d = String(row.date); if (dates.indexOf(d) < 0) dates.push(d); });
-  dates.sort().reverse();
-  if (!dates.length) {
-    sendMessage_(chatId, 'Oldingi davomat yo‘q.');
-    return;
-  }
-  const rows = dates.slice(0, 30).map(date => [{ text:date, callback_data:'hist:open:' + classId + ':' + date }]);
-  sendMessage_(chatId, 'Sanani tanlang.', buildInlineKeyboard_(rows));
+  // Previously this only listed dates with saved records (at most 30).
+  // Now every school day since the start of the academic year is selectable.
+  showAttendanceCalendar_(chatId,null,actor,classId,null,false);
 }
 
 function handleText_(message, actor) {
@@ -2316,7 +2392,7 @@ function handleText_(message, actor) {
     showAttendanceForClass_(chatId, null, actor, actor.classId, todayKey_(), false);
     return;
   }
-  if (text === 'Oldingi davomatlar') {
+  if (text === 'Oldingi davomatlar' || text === 'Sana tanlash') {
     showHistory_(chatId, actor, actor.classId);
     return;
   }
@@ -2384,6 +2460,10 @@ function handleCallback_(callbackQuery, actor, alreadyAnswered) {
       const classId = p[2];
       if (!canAccessClass_(actor, classId)) throw new Error('Ruxsat yo‘q.');
       showAttendanceForClass_(chatId, messageId, actor, classId, p[3] || todayKey_(), Boolean(messageId));
+    } else if (p[0] === 'att' && p[1] === 'days') {
+      showAttendanceCalendar_(chatId,messageId,actor,p[2],p[3]||null,Boolean(messageId));
+    } else if (p[0] === 'att' && p[1] === 'day') {
+      showAttendanceForClass_(chatId,messageId,actor,p[2],p[3],Boolean(messageId));
     } else if (p[0] === 'att' && p[1] === 'mode') {
       const classId = p[2], date = p[3], mode = p[4];
       if (!canAccessClass_(actor,classId)) throw new Error('Ruxsat yo‘q.');
@@ -2422,7 +2502,10 @@ function handleCallback_(callbackQuery, actor, alreadyAnswered) {
       const s = attendanceSummary_(saved);
       const classRow = findRowByValue_(SHEETS.CLASSES,'class_id',classId);
       const text = String(classRow.class_name) + ' — ' + date + '\n\nKeldi: ' + s.KELDI + '\nSababli: ' + s.SABABLI + '\nSababsiz: ' + s.SABABSIZ;
-      editMessage_(chatId, messageId, text, buildInlineKeyboard_([[{text:'Tahrirlash',callback_data:'att:class:'+classId+':'+date}]]));
+      editMessage_(chatId, messageId, text, buildInlineKeyboard_([
+        [{text:'Tahrirlash',callback_data:'att:class:'+classId+':'+date}],
+        [{text:'Boshqa sana',callback_data:'att:days:'+classId+':'+date.slice(0,7)}]
+      ]));
     } else if (p[0] === 'hist' && p[1] === 'class') {
       showHistory_(chatId, actor, p[2]);
     } else if (p[0] === 'hist' && p[1] === 'open') {

@@ -1,0 +1,375 @@
+<!doctype html>
+<html lang="uz">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#002050">
+  <title>Davomat</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css">
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <style>
+    :root{--navy:#002050;--orange:#F86000;--paper:#fff;--muted:#61718a;--border:#d9e0e8;--light:#f5f7fa;--green:#167346;--red:#b13232;--amber:#925500}
+    *{box-sizing:border-box}html,body{margin:0;padding:0;background:#f4f6f9;color:var(--navy);font-family:"Space Grotesk",Arial,sans-serif;font-size:14px}
+    button,input,select{font:inherit}button{cursor:pointer;touch-action:manipulation;transition:background .1s ease}button:disabled{cursor:default;opacity:.5}
+    .layout{max-width:980px;margin:auto;padding:0 14px 96px}
+    .top{background:var(--navy);color:white;padding:18px 16px;margin:0 -14px 14px;display:flex;align-items:center;justify-content:space-between;gap:12px}
+    .top h1{font-size:23px;line-height:1.1;margin:0;font-weight:700}.top small{display:block;color:#cad6e5;margin-top:4px;font-size:11px}
+    .top .tag{border:1px solid #6481a5;border-radius:4px;padding:6px 9px;font-size:11px;white-space:nowrap}
+    .card{background:white;border:1px solid var(--border);border-radius:6px;padding:14px;margin-bottom:12px}
+    .field{display:block;font-size:11px;text-transform:uppercase;color:var(--muted);font-weight:700;letter-spacing:.05em;margin-bottom:6px}
+    select,input[type=search]{width:100%;height:42px;border:1px solid var(--border);border-radius:4px;background:white;padding:8px 10px;color:var(--navy);outline-offset:2px}
+    .heading{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px}.heading strong{font-size:17px}
+    .monthControls{display:flex;align-items:center;gap:7px}.monthControls strong{min-width:118px;text-align:center;text-transform:capitalize}
+    .btn{border:1px solid var(--border);background:white;color:var(--navy);border-radius:4px;min-height:38px;padding:7px 11px;font-weight:600}
+    .btn.primary{background:var(--orange);border-color:var(--orange);color:#fff}
+    .btn.secondary{background:var(--navy);border-color:var(--navy);color:white}
+    .btn.ghost{background:var(--light)}.btn.square{min-width:38px;padding:7px}
+    .btn:focus-visible,.day:focus-visible,.statusBtn:focus-visible{outline:2px solid var(--orange);outline-offset:2px}
+    .legend{display:flex;flex-wrap:wrap;gap:9px 13px;font-size:11px;color:var(--muted);padding:6px 0 12px}.legend b{margin-right:3px}
+    .calendarHead,.calendar{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:5px}
+    .calendarHead>span{text-align:center;padding:5px 0;color:var(--muted);font-size:11px;font-weight:600}
+    .day{border:1px solid var(--border);border-radius:4px;background:white;min-height:57px;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:4px 1px;gap:3px;color:var(--navy)}
+    .day .num{font-weight:700;font-size:14px}.day .note{font-size:9px;white-space:nowrap}.day.inactive{background:var(--light);color:#a3aebb;border-color:#ecf0f4}
+    .day.off{background:#f0f2f5;color:#6c7685}.day.saved{background:#ecf8f1;border-color:#c8e6d5;color:var(--green)}
+    .day.partial{background:#fff3df;color:var(--amber);border-color:#f1d9b5}.day.selected{background:var(--navy);color:white;border-color:var(--navy)}
+    .day.saved.selected,.day.partial.selected{background:var(--navy);color:white}
+    .emptyDay{min-height:57px}.switchline{display:flex;align-items:center;justify-content:space-between;gap:8px;border-top:1px solid var(--border);padding-top:12px;margin-top:13px}
+    .checkrow{display:flex;align-items:center;gap:9px;font-size:13px;font-weight:600}.checkrow input{accent-color:var(--orange);height:18px;width:18px}
+    .muted{color:var(--muted)}.small{font-size:12px}.sep{border:0;border-top:1px solid var(--border);margin:10px 0}
+    .studentRow{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)}
+    .studentRow:last-child{border-bottom:0}.studentName{font-size:13px;font-weight:600;flex:1;min-width:0;word-break:break-word}
+    .states{display:flex;gap:4px;flex-shrink:0}
+    .statusBtn{min-width:36px;min-height:36px;padding:5px 7px;border:1px solid var(--border);border-radius:4px;background:white;color:var(--muted);font-weight:700}
+    .statusBtn[data-active=true][data-status=KELDI]{background:#e5f6eb;border-color:#6ab88b;color:var(--green)}
+    .statusBtn[data-active=true][data-status=SABABLI]{background:#fff1d5;border-color:#ddb576;color:var(--amber)}
+    .statusBtn[data-active=true][data-status=SABABSIZ]{background:#fdeaea;border-color:#da9595;color:var(--red)}
+    .sticky{position:fixed;bottom:0;left:0;right:0;background:white;border-top:1px solid var(--border);padding:11px max(14px,env(safe-area-inset-left));padding-bottom:max(11px,env(safe-area-inset-bottom));z-index:4}
+    .stickyInner{max-width:952px;margin:auto;display:flex;align-items:center;justify-content:space-between;gap:12px}.sticky .btn{min-width:160px}
+    .status{font-size:11px;color:var(--muted);line-height:1.4}.status.error{color:var(--red)}.status.ok{color:var(--green)}
+    .loader{display:none;height:3px;background:var(--orange);width:100%}.loader.active{display:block}
+    .notice{border:1px solid var(--border);background:var(--light);border-radius:4px;padding:10px;font-size:12px;line-height:1.5}
+    .hidden{display:none!important}.pill{border:1px solid var(--border);border-radius:4px;padding:4px 6px;font-size:11px;color:var(--muted)}
+    dialog{max-width:440px;width:calc(100% - 30px);border:1px solid var(--border);border-radius:6px;padding:20px;color:var(--navy);box-shadow:0 8px 30px #00205022}
+    dialog::backdrop{background:#00205088}dialog h2{font-size:19px;margin:0 0 10px}dialog p{line-height:1.5;color:var(--muted)}
+    .dialogActions{display:flex;gap:8px;justify-content:flex-end;margin-top:18px}
+    @media(min-width:670px){.layout{padding:0 25px 110px}.top{margin:0 -25px 20px;padding:20px 25px}.columns{display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start}.day{min-height:67px}.studentRow{padding:12px 0}}
+    @media(max-width:370px){.layout{padding-left:8px;padding-right:8px}.top{margin-left:-8px;margin-right:-8px}.statusBtn{min-width:31px;padding:5px}.card{padding:10px}.day{min-height:48px}}
+  </style>
+</head>
+<body>
+  <header class="top">
+    <div><h1><i class="fa-solid fa-clipboard-check" aria-hidden="true"></i> Davomat</h1><small>Namangan 1-IMI · Tezkor davomat</small></div>
+    <span class="tag">2026–2027</span>
+  </header>
+  <div id="loader" class="loader"></div>
+  <main class="layout">
+    <div id="errorNotice" class="notice hidden" role="alert"></div>
+    <section id="app" class="hidden">
+      <div class="card">
+        <label for="classSelect" class="field">Sinf</label>
+        <select id="classSelect"></select>
+      </div>
+      <div class="columns">
+        <section class="card">
+          <div class="heading">
+            <strong>Sanani tanlang</strong>
+            <div class="monthControls">
+              <button class="btn square" id="prevMonth" aria-label="Oldingi oy"><i class="fa-solid fa-chevron-left"></i></button>
+              <strong id="monthTitle">—</strong>
+              <button class="btn square" id="nextMonth" aria-label="Keyingi oy"><i class="fa-solid fa-chevron-right"></i></button>
+            </div>
+          </div>
+          <div class="legend">
+            <span><b style="color:#167346">+</b> Berilgan</span>
+            <span><b style="color:#925500">!</b> Chala</span>
+            <span><b>○</b> Berilmagan</span>
+            <span><b>—</b> Dam / ta’til</span>
+          </div>
+          <div class="calendarHead"><span>Du</span><span>Se</span><span>Ço</span><span>Pa</span><span>Ju</span><span>Şa</span><span>Ya</span></div>
+          <div id="calendar" class="calendar"></div>
+          <div class="switchline">
+            <label class="checkrow"><input id="multi" type="checkbox"> Bir neçta sanaga</label>
+            <button id="clearDates" class="btn" type="button">Tozalaş</button>
+          </div>
+          <p class="muted small" id="dateHelp">Sanani tanlang.</p>
+        </section>
+        <section class="card">
+          <div class="heading"><strong>Öquvçilar</strong><span id="count" class="pill">0 ta</span></div>
+          <div class="notice" id="emptyRoster">Öquvçilarni köriş uçun sinf va sanani tanlang.</div>
+          <div id="rosterArea" class="hidden">
+            <input id="search" type="search" placeholder="Ism yoki familiya orqali qidiriş" aria-label="Öquvçi qidiriş">
+            <div class="switchline">
+              <span class="small muted" id="currentSelection">—</span>
+              <button id="allPresent" type="button" class="btn ghost">Hammasi keldi</button>
+            </div>
+            <div id="students"></div>
+          </div>
+        </section>
+      </div>
+    </section>
+  </main>
+  <footer id="sticky" class="sticky hidden">
+    <div class="stickyInner">
+      <div id="status" class="status" aria-live="polite">Sana tanlanmagan</div>
+      <button id="save" type="button" class="btn primary" disabled><i class="fa-solid fa-floppy-disk" aria-hidden="true"></i> Saqlaş</button>
+    </div>
+  </footer>
+  <dialog id="confirmDialog" aria-labelledby="dialogTitle">
+    <h2 id="dialogTitle">Davomatni tasdiqlaş</h2>
+    <p id="dialogText"></p>
+    <div class="dialogActions">
+      <button class="btn" id="cancelConfirm" type="button">Qaytiş</button>
+      <button class="btn secondary" id="acceptConfirm" type="button">Tasdiqlayman</button>
+    </div>
+  </dialog>
+  <script>
+    'use strict';
+    const tg=window.Telegram?.WebApp||null;
+    const initData=tg?.initData||'';
+    const $=id=>document.getElementById(id);
+    const S={
+      data:null,classId:'',month:'',multi:false,dates:new Set(),
+      states:{},monthCache:new Map(),loadingMonths:new Set(),
+      saving:false,dirty:false
+    };
+    const weekdays=['Du','Se','Ço','Pa','Ju','Şa','Ya'];
+    const months=['yanvar','fevral','mart','aprel','may','iyun','iyul','avgust','sentabr','oktabr','noyabr','dekabr'];
+    const isoDay=date=>date.toISOString().slice(0,10);
+    const pad=x=>String(x).padStart(2,'0');
+    const dateParts=day=>day.split('-').map(Number);
+    const shiftMonth=(month,delta)=>{const [y,m]=month.split('-').map(Number);const d=new Date(Date.UTC(y,m-1+delta,1));return isoDay(d).slice(0,7)};
+    const key=()=>S.classId+'|'+S.month;
+    const monthOf=day=>day.slice(0,7);
+    const curStudents=()=>S.data?.students.filter(x=>x.classId===S.classId)||[];
+    const btns=html=>html;
+    function loading(flag){$('loader').classList.toggle('active',flag)}
+    function announce(message,type=''){
+      $('status').textContent=message;$('status').className='status'+(type?' '+type:'');
+    }
+    function error(message){
+      $('errorNotice').textContent=message;$('errorNotice').classList.remove('hidden');
+      announce(message,'error');
+    }
+    function clearError(){$('errorNotice').classList.add('hidden')}
+    async function api(action,extra={}){
+      const ctl=new AbortController();const timeout=setTimeout(()=>ctl.abort(),29000);
+      try{
+        const response=await fetch('/api/attendance',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({action,initData,...extra}),signal:ctl.signal,cache:'no-store'});
+        const result=await response.json();
+        if(!response.ok||!result.ok)throw new Error(result.error||'Server javob bermadi.');
+        return result.data;
+      } catch(err){
+        if(err.name==='AbortError')throw new Error('Server javobi kechikdi. Ma’lumot saqlanganini tekşiring.');
+        throw err;
+      } finally {clearTimeout(timeout)}
+    }
+    function schoolStatus(day){
+      const y=S.data.year;
+      if(day<y.start||day>y.end)return 'outside';
+      const d=dateParts(day),utc=new Date(Date.UTC(d[0],d[1]-1,d[2]));
+      const wd=utc.getUTCDay();
+      const events=S.data.holidays.filter(e=>day>=e.from&&day<=e.to);
+      if(events.some(e=>e.type==='WORKDAY'))return day>S.data.today?'future':'school';
+      if(events.some(e=>e.type==='HOLIDAY'||e.type==='VACATION'))return 'off';
+      if(wd===0||wd===6)return 'off';
+      return day>S.data.today?'future':'school';
+    }
+    function monthRecords(month=S.month) {return S.monthCache.get(S.classId+'|'+month)||null}
+    function savedCount(day) {
+      const marks=monthRecords(monthOf(day))?.[day];
+      const total=curStudents().length;
+      return {total,count:marks?Object.keys(marks).length:0};
+    }
+    function drawCalendar(){
+      const el=$('calendar');el.textContent='';
+      const [year,month]=S.month.split('-').map(Number);
+      $('monthTitle').textContent=months[month-1]+' '+year;
+      const firstWeekday=(new Date(Date.UTC(year,month-1,1)).getUTCDay()+6)%7;
+      const totalDays=new Date(Date.UTC(year,month,0)).getUTCDate();
+      for(let i=0;i<firstWeekday;i++){const blank=document.createElement('div');blank.className='emptyDay';el.appendChild(blank)}
+      const marks=monthRecords();
+      for(let n=1;n<=totalDays;n++){
+        const day=S.month+'-'+pad(n),type=schoolStatus(day);
+        const button=document.createElement('button');button.type='button';
+        const has=S.dates.has(day);
+        const num=document.createElement('span');num.className='num';num.textContent=n;
+        const hint=document.createElement('span');hint.className='note';
+        const saved=marks?.[day],count=saved?Object.keys(saved).length:0,total=curStudents().length;
+        let style=type==='school'?'':' off',hintText='';
+        if(type==='outside'||type==='future') {style=' inactive';hintText=type==='future'?'Keyin':'—'}
+        else if(type==='off') hintText='Dam';
+        else if(count&&count<total){style=' partial';hintText='Chala'}
+        else if(count&&count>=total){style=' saved';hintText='Berilgan'}
+        else hintText=marks?'Boş':'…';
+        if(has){style+=' selected';hintText='Tanlangan'}
+        button.className='day'+style;button.disabled=type!=='school';
+        button.dataset.date=day;
+        button.setAttribute('aria-label',day+' '+hintText);
+        hint.textContent=hintText;
+        button.append(num,hint);
+        button.addEventListener('click',()=>toggleDate(day));
+        el.appendChild(button);
+      }
+      $('prevMonth').disabled=S.month<=S.data.year.start.slice(0,7);
+      $('nextMonth').disabled=S.month>=minMonth(S.data.today,S.data.year.end);
+      $('dateHelp').textContent=S.dates.size?S.dates.size+' ta sana tanlangan. Öquvçilarni belgilang.':'Sanani tanlang. Kunlar bir zumda belgilanadi.';
+      updateSave();
+    }
+    function minMonth(a,b){return (a<b?a:b).slice(0,7)}
+    function setMonth(month){
+      if(month<S.data.year.start.slice(0,7)||month>minMonth(S.data.today,S.data.year.end))return;
+      S.month=month;drawCalendar();loadMonth(S.classId,month);
+    }
+    async function loadMonth(classId,month){
+      const id=classId+'|'+month;
+      if(S.monthCache.has(id)||S.loadingMonths.has(id))return;
+      S.loadingMonths.add(id);loading(true);
+      try{
+        const res=await api('month',{classId,month});
+        S.monthCache.set(id,res.dates||{});
+        if(S.classId===classId&&S.month===month){drawCalendar();populateSelection()}
+      }catch(err){if(S.classId===classId&&S.month===month)error(err.message)}
+      finally{
+        S.loadingMonths.delete(id);
+        if(!S.loadingMonths.size)loading(false);
+      }
+    }
+    function toggleDate(day){
+      if(S.saving||schoolStatus(day)!=='school')return;
+      if(!S.multi){
+        S.dates=new Set([day]);S.dirty=false;S.states={};
+      }else{
+        if(S.dates.has(day))S.dates.delete(day);
+        else if(S.dates.size<25)S.dates.add(day);
+        else {announce('Bir martada 25 tagacha sana tanlaş mumkin.','error');return}
+        S.states={};S.dirty=false;
+      }
+      drawCalendar();populateSelection();
+    }
+    function populateSelection(){
+      const dates=[...S.dates].sort();
+      const students=curStudents(),has=dates.length>0;
+      $('emptyRoster').classList.toggle('hidden',has);
+      $('rosterArea').classList.toggle('hidden',!has);
+      if(!has){$('count').textContent='0 ta';announce('Sana tanlanmagan');updateSave();return}
+      const ready=dates.every(day=>monthRecords(monthOf(day))!==null);
+      if(!ready){
+        $('emptyRoster').classList.remove('hidden');$('emptyRoster').textContent='Sanalar ma’lumoti yüklanmoqda…';
+        $('rosterArea').classList.add('hidden');
+        dates.forEach(day=>loadMonth(S.classId,monthOf(day)));
+        announce('Davomat yüklanmoqda…');
+        updateSave();return;
+      }
+      $('emptyRoster').textContent='Öquvçilarni köriş uçun sanani tanlang.';
+      if(!S.dirty) {
+        const current=dates.length===1?monthRecords(monthOf(dates[0]))?.[dates[0]]||{}:{};
+        S.states={};students.forEach(st=>{S.states[String(st.id)]=current[String(st.id)]||'KELDI'});
+      }
+      $('emptyRoster').classList.add('hidden');$('rosterArea').classList.remove('hidden');
+      $('count').textContent=students.length+' ta';
+      $('currentSelection').textContent=dates.length===1?dates[0]:dates.length+' ta sana';
+      drawStudents();announce('Belgilash tayyor — tugmalar darhol işlaydi.');
+      updateSave();
+    }
+    function drawStudents(){
+      const el=$('students');el.textContent='';
+      const search=$('search').value.trim().toLocaleLowerCase();
+      const fragment=document.createDocumentFragment();
+      curStudents().filter(st=>st.name.toLocaleLowerCase().includes(search)).forEach(st=>{
+        const row=document.createElement('div');row.className='studentRow';
+        const title=document.createElement('span');title.className='studentName';title.textContent=st.name;
+        const states=document.createElement('div');states.className='states';
+        [['KELDI','+','Keldi'],['SABABLI','s','Sababli'],['SABABSIZ','−','Sababsiz']].forEach(([value,label,desc])=>{
+          const button=document.createElement('button');button.type='button';button.className='statusBtn';
+          button.dataset.status=value;button.dataset.active=String(S.states[String(st.id)]===value);
+          button.textContent=label;button.title=desc;button.setAttribute('aria-label',st.name+' '+desc);
+          button.addEventListener('click',()=>{
+            if(S.saving)return;
+            S.states[String(st.id)]=value;S.dirty=true;
+            states.querySelectorAll('button').forEach(btn=>{btn.dataset.active=String(btn.dataset.status===value)});
+            updateSave();
+          });states.appendChild(button);
+        });
+        row.append(title,states);fragment.appendChild(row);
+      });el.appendChild(fragment);
+    }
+    function updateSave(){
+      const n=S.dates.size,ready=n&&[...S.dates].every(day=>monthRecords(monthOf(day))!==null);
+      $('save').disabled=!ready||S.saving||!curStudents().length;
+      $('save').innerHTML=S.saving?'<i class="fa-solid fa-spinner fa-spin"></i> Saqlanmoqda…':
+        '<i class="fa-solid fa-floppy-disk"></i> Saqlaş'+(n>1?' ('+n+')':'');
+    }
+    async function doSave(){
+      if(S.saving||!S.dates.size)return;
+      const dates=[...S.dates].sort(),entries=curStudents().map(st=>({
+        studentId:st.id,status:S.states[String(st.id)]||'KELDI'
+      }));
+      S.saving=true;updateSave();announce('Serverga saqlanmoqda. Javob kelmagunça yopmang.');
+      try{
+        const cls=S.classId;const saved=await api('save',{classId:cls,dates,entries});
+        dates.forEach(day=>{
+          const key=cls+'|'+monthOf(day),monthData=S.monthCache.get(key)||{};
+          monthData[day]=Object.fromEntries(entries.map(st=>[String(st.studentId),st.status]));
+          S.monthCache.set(key,monthData);
+        });
+        S.dirty=false;
+        drawCalendar();populateSelection();
+        announce(dates.length+' kun davomat saqlandi.','ok');
+        tg?.HapticFeedback?.notificationOccurred?.('success');
+        if(saved?.summary) $('status').textContent=dates.length+' sana saqlandi · Keldi '+saved.summary.KELDI+
+          ' · Sababli '+saved.summary.SABABLI+' · Sababsiz '+saved.summary.SABABSIZ;
+      } catch(err){error(err.message)}
+      finally{S.saving=false;updateSave()}
+    }
+    function saveClicked(){
+      if(S.saving||!S.dates.size)return;
+      const overwritten=[...S.dates].filter(day=>savedCount(day).count>0);
+      if(overwritten.length){
+        $('dialogText').textContent=overwritten.length+' ta sanada oldin davomat berilgan. Saqlasangiz şuşa kunlardagi yozuvlar ham özgaradi. Davom etasizmi?';
+        $('confirmDialog').showModal();
+      } else doSave();
+    }
+    function classChanged(){
+      S.classId=$('classSelect').value;S.dates.clear();S.states={};S.dirty=false;
+      drawCalendar();populateSelection();loadMonth(S.classId,S.month);
+    }
+    async function start(){
+      tg?.ready();tg?.expand();loading(true);
+      if(!initData){error('Davomatni Telegram botidagi Tezkor davomat tugmasidan açing.');loading(false);return}
+      try{
+        S.data=await api('bootstrap');
+        if(!S.data.classes?.length)throw new Error('Sizga biriktirilgan sinf topilmadi.');
+        $('app').classList.remove('hidden');$('sticky').classList.remove('hidden');
+        const select=$('classSelect');select.textContent='';
+        S.data.classes.forEach(cls=>{const opt=document.createElement('option');opt.value=cls.id;opt.textContent=cls.name;select.appendChild(opt)});
+        S.classId=S.data.classes[0].id;
+        S.month=minMonth(S.data.today,S.data.year.end);
+        document.querySelector('.tag').textContent=S.data.year.id;
+        clearError();drawCalendar();populateSelection();loadMonth(S.classId,S.month);
+      }catch(err){error(err.message)}
+      finally{loading(false)}
+    }
+    $('classSelect').addEventListener('change',classChanged);
+    $('prevMonth').addEventListener('click',()=>setMonth(shiftMonth(S.month,-1)));
+    $('nextMonth').addEventListener('click',()=>setMonth(shiftMonth(S.month,1)));
+    $('multi').addEventListener('change',event=>{
+      S.multi=event.target.checked;S.dates.clear();S.states={};S.dirty=false;
+      drawCalendar();populateSelection();
+    });
+    $('clearDates').addEventListener('click',()=>{S.dates.clear();S.states={};S.dirty=false;drawCalendar();populateSelection()});
+    $('search').addEventListener('input',drawStudents);
+    $('allPresent').addEventListener('click',()=>{
+      curStudents().forEach(st=>{S.states[String(st.id)]='KELDI'});
+      S.dirty=true;drawStudents();updateSave();
+    });
+    $('save').addEventListener('click',saveClicked);
+    $('cancelConfirm').addEventListener('click',()=>$('confirmDialog').close());
+    $('acceptConfirm').addEventListener('click',()=>{$('confirmDialog').close();doSave()});
+    start();
+  </script>
+</body>
+</html>

@@ -35,7 +35,7 @@
   const store = {
     api:null,bootstrap:null,afterWrite:null,onAttendance:null,page:'attendance',cache:new Map(),
     allowed:[],studentClass:'',studentSearch:'',
-    startDate:'',endDate:'',busy:false,serial:0
+    startDate:'',endDate:'',controlFilter:'all',busy:false,serial:0
   };
 
   function message(text,error=false) {
@@ -211,7 +211,10 @@
         ['Öquvçilar',m.totalStudents||0],['Keldi',m.keldi||0],['Sababli',m.sababli||0],['Sababsiz',m.sababsiz||0]]);
     }
     const classes=(m.classes||[]).map(c=>{
-      const classState=range?(c.missingDays>0?'missing':'done'):(c.submitted?'done':'missing');
+      const marked=(c.keldi||0)+(c.sababli||0)+(c.sababsiz||0);
+      const classState=range
+        ?(c.submittedDays===0?'missing':c.missingDays>0?'partial':'done')
+        :(!c.submitted?'missing':marked<(c.totalStudents||0)?'partial':'done');
       const note=range
         ?'Davomatli kunlar: '+(c.submittedDays||0)+' / '+(c.schoolDays||0)+' · Keldi: '+(c.keldi||0)+' · Sababli: '+(c.sababli||0)+' · Sababsiz: '+(c.sababsiz||0)
         :(c.submitted?'Davomat berilgan':'Davomat berilmagan')+' · Keldi: '+(c.keldi||0)+' · Sababli: '+(c.sababli||0)+' · Sababsiz: '+(c.sababsiz||0);
@@ -235,7 +238,7 @@
     const status={done:'To‘liq berilgan',missing:'Berilmagan',partial:'Qisman berilgan',unassigned:'Rahbar yo‘q'};
     const rows=(data.items||[]).map(row=>{
       const state=tone[row.status]||'missing';
-      return '<div class="sectionItem tone-'+state+'"><div class="details"><strong>'+esc(row.name)+'</strong>'+
+      return '<div class="sectionItem tone-'+state+'" data-state="'+state+'"><div class="details"><strong>'+esc(row.name)+'</strong>'+
         '<small>'+esc(row.teacherName||'Rahbar biriktirilmagan')+'</small>'+
         '<small>'+esc(status[row.status]||'Berilmagan')+' · '+esc(row.submitted||0)+' / '+esc(row.total||0)+
         ' · Keldi '+esc(row.keldi||0)+' · Sababli '+esc(row.sababli||0)+' · Sababsiz '+esc(row.sababsiz||0)+'</small></div>'+
@@ -244,11 +247,22 @@
     const dateInput='<div class="sectionToolbar"><label class="small">Sana <input id="controlDate" type="date" value="'+
       esc(data.date)+'" max="'+esc(store.bootstrap.today)+'"></label>'+
       btn('Körsatish','control.filter','','accent')+'</div>';
+    const filters=[['all','Barchasi'],['done','Berilgan'],['missing','Berilmagan'],['partial','Chala'],['unassigned','Rahbarsiz']]
+      .map(([key,label])=>btn(label,'control.show','data-filter="'+key+'"'+(store.controlFilter===key?' aria-pressed="true"':''))).join('');
     $('sectionPanel').innerHTML='<div class="card">'+heading('control')+dateInput+
       (data.schoolDay?'':'<div class="sectionEmpty">Bu sana öqiş kuni emas.</div>')+
-      totals+'<div class="sectionList">'+(rows||empty('Sinf topilmadi.'))+'</div></div>';
+      totals+'<div class="controlFilters">'+filters+'</div><div class="sectionList" id="controlList">'+
+      (rows||empty('Sinf topilmadi.'))+'</div></div>';
+    applyControlFilter();
   }
 
+  function applyControlFilter() {
+    const list=$('controlList');
+    if(!list)return;
+    list.querySelectorAll('.sectionItem').forEach(row=>{
+      row.classList.toggle('hidden',store.controlFilter!=='all' && row.dataset.state!=='tone-'+store.controlFilter);
+    });
+  }
   function renderClasses(data) {
     const rows=(data.items||[]).map(c=>{
       const note=c.students+' ta öquvçi'+(c.teacher?' · '+c.teacher:' · Rahbar biriktirilmagan');
@@ -322,7 +336,15 @@
     const action=button.dataset.action, id=button.dataset.id||'';
     const page=store.page, datum=store.cache.get(page);
     if(action==='retry')return refresh();
-    if(action==='control.filter')return show('control',true,{date:$('controlDate')?.value});
+    if(action==='control.show') {
+      store.controlFilter=button.dataset.filter||'all';
+      renderControl(store.cache.get('control'));
+      return;
+    }
+    if(action==='control.filter'){
+      store.controlFilter='all';
+      return show('control',true,{date:$('controlDate')?.value});
+    }
     if(action==='stats.filter') {
       const start=$('statsFrom')?.value,end=$('statsTo')?.value;
       store.startDate=start;store.endDate=end;

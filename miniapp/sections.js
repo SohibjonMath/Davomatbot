@@ -101,7 +101,8 @@
     message('Saqlanmoqda…');
     try {
       await store.api('manage',{operation,...data});
-      if(typeof store.afterWrite==='function')await store.afterWrite();
+      if(!operation.startsWith('settings.')&&typeof store.afterWrite==='function')
+        await store.afterWrite();
       store.cache.clear();
       await refresh(page);
       message('Özgariş saqlandi.');

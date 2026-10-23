@@ -1909,40 +1909,100 @@ function ensureNotificationTrigger_() {
   props.setProperty(key,String(cadence));
   return cadence;
 }
-function showSettings_(chatId, actor) {
-  if (!actor || actor.role === ROLES.UNASSIGNED) throw new Error('Ruxsat yo‘q.');
-  const settings = getNotificationSettings_(actor.telegramId);
-  const rows = [
-    [{text:'Bildirişnoma: ' + (settings.enabled ? 'Yoqilgan' : 'Öçirilgan'),callback_data:'notify:toggle'}],
-    [{text:'Vaqt: ' + settings.time,callback_data:'notify:time'}]
-  ];
-  if (actor.role === ROLES.TEACHER) rows.push([{text:'Sinfdan voz keçish',callback_data:'settings:release'}]);
-  sendMessage_(chatId,'Sozlamalar\nBildirişnoma vaqti: ' + settings.time + '\nHolat: ' + (settings.enabled ? 'Yoqilgan' : 'Öçirilgan'),buildInlineKeyboard_(rows));
-}
 
-function processNotifications_() {
-  ensureSettingsSheet_();
-  const now = new Date();
-  const nowTime = Utilities.formatDate(now,Session.getScriptTimeZone(),'HH:mm');
-  const today = Utilities.formatDate(now,Session.getScriptTimeZone(),'yyyy-MM-dd');
-  if (!isSchoolDay_(today)) return;
-  const settingsRows = getRowsAsObjects_(SHEETS.SETTINGS).filter(row => isActiveFlag_(row.notifications_enabled));
-  settingsRows.forEach(row => {
-    const id = String(row.telegram_id || '').trim();
-    if (!id || String(row.last_notification_date || '') === today || !notificationDueNow_(nowTime,String(row.notification_time || '08:00'))) return;
-    try {
-      const actor = resolveActor_(id);
-      if (actor.role === ROLES.TEACHER && actor.classId) {
-        const submitted = getRowsAsObjects_(SHEETS.ATTENDANCE).some(item => statisticsDateKey_(item.date) === today && sameClassId_(item.class_id,actor.classId));
-        if (!submitted) sendMessage_(id,'Eslatma: bugungi davomat hali saqlanmagan.');
-      } else if (actor.role === ROLES.ADMIN || actor.role === ROLES.SUPER_ADMIN) {
-        const model = getTodayStatisticsModel_(today);
-        const missing = model.classes.filter(item => !item.submitted);
-        if (missing.length) sendLongText_(id,'Bugun davomat bermagan sinflar:\n' + missing.map(item => '- ' + item.className + ' — ' + item.teacherName).join('\n'));
-      }
-      saveNotificationSettings_(id,{lastDate:today});
-    } catch (error) { console.error('Bildirişnoma xatosi:',error && error.message ? error.message : error); }
+function notificationMenu_(role) {
+  const url=getFastDavomatUrl_().split(/[?#]/)[0].replace(/\/$/,'');
+  return buildInlineKeyboard_([
+    [{text:role===ROLES.TEACHER?'Bugungi davomatni ochish':'Rahbarlar nazorati',
+      web_app:{url:url+'/?page='+(role===ROLES.TEACHER?'attendance':'control')}}],
+    [{text:'Eslatmalar sozlamasi',web_app:{url:url+'/?page=settings'}},
+     {text:'Bugun eslatmasin',callback_data:'rem:mute'}]
+  ]);
+}
+function notificationCounts_(classes,students,attendance,today) {
+  const active={},counts={},seen={};
+  classes.forEach(cls=>{counts[classIdKey_(cls.class_id)]={total:0,saved:0};});
+  students.forEach(st=>{
+    const key=classIdKey_(st.class_id),id=String(st.student_id);
+    if(isActiveFlag_(st.active)&&counts[key]){active[key+'|'+id]=true;counts[key].total++;}
   });
+  attendance.forEach(row=>{
+    if(statisticsDateKey_(row.date)!==today)return;
+    const classId=classIdKey_(row.class_id),k=classId+'|'+String(row.student_id);
+    if(!counts[classId]||!active[k]||seen[k]||
+        ['KELDI','SABABLI','SABABSIZ'].indexOf(String(row.status))<0)return;
+    seen[k]=true;counts[classId].saved++;
+  });
+  return counts;
+}
+function showSettings_(chatId,actor) {
+  if(!actor||actor.role===ROLES.UNASSIGNED)throw new Error('Ruxsat yo‘q.');
+  const settings=getNotificationSettings_(actor.telegramId);
+  const labels={off:'O‘chirilgan',once:'Kuniga bir marta',repeat:'Takroriy'};
+  const text='Eslatmalar\nHolat: '+labels[settings.mode]+
+    '\nBoshlanish: '+settings.time+(settings.mode==='repeat'?
+      ' · Tugash: '+settings.endTime+' · Har '+settings.interval+' daqiqada':'');
+  sendMessage_(chatId,text,buildInlineKeyboard_([[
+    {text:'Eslatmalar sozlamasi',web_app:{url:getFastDavomatUrl_()+'?page=settings'}}
+  ]]));
+}
+function processNotifications_() {
+  // One run for all staff: acquire the same lock as attendance saves to avoid
+  // sending a notification after a completed attendance transaction.
+  const lock=LockService.getScriptLock();
+  if(!lock.tryLock(1000))return;
+  try {
+    resetRequestCache_();
+    ensureSettingsSheet_();
+    const now=new Date(),tz=Session.getScriptTimeZone();
+    const nowTime=Utilities.formatDate(now,tz,'HH:mm');
+    const today=Utilities.formatDate(now,tz,'yyyy-MM-dd');
+    const due=getRowsAsObjects_(SHEETS.SETTINGS).map(row=>{
+      const settings=notificationSettingsFromRow_(row,row.telegram_id);
+      return notificationDue_(settings,now,nowTime,today)?settings:null;
+    }).filter(Boolean);
+    if(!due.length||!isSchoolDay_(today))return;
+    // An attendance scan happens only if somebody is actually due.
+    const users=getRowsAsObjects_(SHEETS.USERS),superId=getSuperAdminId_();
+    const userById={};users.forEach(row=>{if(isActiveFlag_(row.active))userById[String(row.telegram_id)]=row;});
+    const classes=listActiveClasses_(),students=getRowsAsObjects_(SHEETS.STUDENTS);
+    const counts=notificationCounts_(classes,students,getRowsAsObjects_(SHEETS.ATTENDANCE),today);
+    const classById={};classes.forEach(row=>{classById[classIdKey_(row.class_id)]=row;});
+    let sent=0;
+    for(const settings of due) {
+      if(sent>=12)break; // Don't hold the save lock for too many Telegram calls.
+      const id=settings.telegramId,user=userById[id];
+      const role=superId&&id===String(superId)?ROLES.SUPER_ADMIN:user&&String(user.role||'');
+      let text='';
+      if(role===ROLES.TEACHER&&user) {
+        const key=classIdKey_(user.class_id),cls=classById[key],progress=counts[key];
+        if(!cls||String(cls.teacher_telegram_id||'')!==id||
+           !progress||progress.total<=0||progress.saved>=progress.total)continue;
+        text='Davomat eslatmasi\n'+String(cls.class_name)+
+          ' sinfining bugungi davomati hali to‘liq berilmagan.\n'+
+          'Belgilangan: '+progress.saved+' / '+progress.total+
+          '\nDavomat to‘liq saqlangandan keyin eslatmalar to‘xtaydi.';
+      } else if(role===ROLES.ADMIN||role===ROLES.SUPER_ADMIN) {
+        const unfinished=classes.filter(cls=>{
+          const progress=counts[classIdKey_(cls.class_id)];
+          return progress&&progress.total>0&&progress.saved<progress.total;
+        });
+        if(!unfinished.length)continue;
+        text='Davomat nazorati\nDavomati yakunlanmagan sinflar: '+unfinished.length+
+          '\n'+unfinished.slice(0,12).map(cls=>{
+            const p=counts[classIdKey_(cls.class_id)];
+            return String(cls.class_name)+' — '+p.saved+'/'+p.total;
+          }).join('\n');
+      } else continue;
+      try {
+        sendMessage_(id,text,notificationMenu_(role));
+        saveNotificationSettings_(id,{lastDate:today,lastSentAt:now.toISOString()});
+        sent++;
+      } catch(error) {
+        console.error('Eslatma yuborilmadi:',id,error&&error.message||error);
+      }
+    }
+  } finally {lock.releaseLock();}
 }
 
 // ===== AcademicYearCalendarCore.gs =====
@@ -2374,7 +2434,7 @@ function showCalendarEvents_(chatId, actor) {
 
 function installDavomatTriggers() {
   const existing = ScriptApp.getProjectTriggers().map(trigger => trigger.getHandlerFunction());
-  if (existing.indexOf('processNotifications_') < 0) ScriptApp.newTrigger('processNotifications_').timeBased().everyMinutes(5).create();
+  ensureNotificationTrigger_();
   if (existing.indexOf('processAcademicYearMaintenance_') < 0) ScriptApp.newTrigger('processAcademicYearMaintenance_').timeBased().everyDays(1).atHour(3).create();
   return true;
 }

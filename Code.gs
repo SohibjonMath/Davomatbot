@@ -553,13 +553,17 @@ function davomatBuildYearSheet_(yearId, attendanceRows, overwrite) {
   students.forEach(st => { byId[String(st.student_id)] = st; });
   const years = getRowsAsObjects_(SHEETS.ACADEMIC_YEARS);
   const activeYear = years.some(y => String(y.year_id)===String(yearId) && String(y.status).toUpperCase()==='ACTIVE');
-  const ids = {};
-  data.forEach(row => { ids[String(row.student_id)] = true; });
+  const ids = {}, sampleById = {};
+  data.forEach(row => {
+    const id=String(row.student_id);
+    ids[id] = true;
+    if(!sampleById[id]) sampleById[id]=row;
+  });
   if (activeYear) students.filter(st=>isActiveFlag_(st.active)).forEach(st => { ids[String(st.student_id)] = true; });
   const classNames = davomatClassNames_(yearId);
   const roster = Object.keys(ids).map(id => {
     const st = byId[id] || {};
-    const record = data.find(r => String(r.student_id) === id);
+    const record = sampleById[id];
     const classId = classIdKey_(st.class_id || (record && record.class_id));
     return {id:id, name:String(st.full_name || 'ID ' + id), className:classNames[classId] || classId};
   }).sort((a,b)=>a.className.localeCompare(b.className) || a.name.localeCompare(b.name));
@@ -605,6 +609,29 @@ function syncDavomatYearSheets_(overwrite) {
 function rebuildDavomatYearSheets() {
   resetRequestCache_();
   return syncDavomatYearSheets_(true);
+}
+
+
+// Read one day from the narrow annual grid instead of scanning all historic log rows.
+function davomatReadDay_(classId, date) {
+  const dateKey=normalizeDateKey_(date);
+  const sheet=getSpreadsheet_().getSheetByName(davomatYearName_(davomatYearId_(dateKey)));
+  if (!sheet) return null;
+  const width=sheet.getLastColumn(), count=sheet.getLastRow()-1;
+  if (width<4 || count<1) return {};
+  const headers=sheet.getRange(1,4,1,width-3).getDisplayValues()[0];
+  const index=headers.indexOf(dateKey);
+  if(index<0) return {};
+  const ids=sheet.getRange(2,3,count,1).getValues();
+  const values=sheet.getRange(2,index+4,count,1).getValues();
+  const byStudent={};
+  ids.forEach((row,i)=>{
+    const symbol=String(values[i][0]||'').trim();
+    if(symbol==='+') byStudent[String(row[0])]=ATTENDANCE_STATUS.KELDI;
+    if(symbol==='s') byStudent[String(row[0])]=ATTENDANCE_STATUS.SABABLI;
+    if(symbol==='-') byStudent[String(row[0])]=ATTENDANCE_STATUS.SABABSIZ;
+  });
+  return byStudent;
 }
 
 // Single-column day update, even if a whole class submits at once.
@@ -670,21 +697,23 @@ function normalizeDateKey_(date) {
 }
 
 function loadAttendance_(classId, date) {
-  const dateKey = normalizeDateKey_(date);
-  const students = listActiveRows_(SHEETS.STUDENTS)
-    .filter(row => sameClassId_(row.class_id, classId))
-    .sort((a,b) => String(a.full_name).localeCompare(String(b.full_name)));
-  const saved = getRowsAsObjects_(SHEETS.ATTENDANCE).filter(row =>
-    String(row.date) === dateKey && sameClassId_(row.class_id, classId)
-  );
-  const byStudent = {};
-  saved.forEach(row => byStudent[String(row.student_id)] = row.status);
-  return students.map(student => ({
-    studentId: Number(student.student_id),
-    fullName: String(student.full_name),
-    status: ATTENDANCE_CYCLE.indexOf(byStudent[String(student.student_id)]) >= 0
-      ? byStudent[String(student.student_id)]
-      : ATTENDANCE_STATUS.KELDI
+  const dateKey=normalizeDateKey_(date);
+  const students=listActiveRows_(SHEETS.STUDENTS)
+    .filter(row=>sameClassId_(row.class_id,classId))
+    .sort((a,b)=>String(a.full_name).localeCompare(String(b.full_name)));
+  let byStudent=davomatReadDay_(classId,dateKey);
+  if (byStudent === null) {
+    byStudent={};
+    getRowsAsObjects_(SHEETS.ATTENDANCE).forEach(row=>{
+      if(statisticsDateKey_(row.date)===dateKey && sameClassId_(row.class_id,classId))
+        byStudent[String(row.student_id)]=row.status;
+    });
+  }
+  return students.map(student=>({
+    studentId:Number(student.student_id),
+    fullName:String(student.full_name),
+    status:ATTENDANCE_CYCLE.indexOf(byStudent[String(student.student_id)])>=0
+      ?byStudent[String(student.student_id)]:ATTENDANCE_STATUS.KELDI
   }));
 }
 

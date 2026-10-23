@@ -2447,7 +2447,9 @@ function fastAppParseInitData_(raw) {
   const source=Object.keys(fields).filter(key=>key!=='hash'&&key!=='signature')
     .sort().map(key=>key+'='+fields[key]).join('\n');
   const secret=Utilities.computeHmacSha256Signature(getTelegramToken_(),'WebAppData');
-  const bytes=Utilities.computeHmacSha256Signature(source,secret);
+  // Apps Script supports (String, String) or (Byte[], Byte[]), not (String, Byte[]).
+  // Keep the raw binary HMAC key required by Telegram; encode the payload as UTF-8 bytes.
+  const bytes=Utilities.computeHmacSha256Signature(Utilities.newBlob(source,'text/plain').getBytes(),secret);
   const actual=bytes.map(byte=>('0'+(byte&255).toString(16)).slice(-2)).join('');
   const expected=String(fields.hash).toLowerCase();
   let difference=actual.length^expected.length;

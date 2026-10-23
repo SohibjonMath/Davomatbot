@@ -1,6 +1,28 @@
 // Same-origin API proxy for Telegram's Mini App. Telegram identity and
 // school permissions are verified in Apps Script using signed initData.
 export default async function handler(request) {
+  // Temporary read-only transport diagnostic. An invalid identity is used,
+  // so Apps Script cannot read or write anyone's attendance data.
+  if(request.method==='GET' && new URL(request.url).searchParams.has('transport-check')) {
+    const backend='https://script.google.com/macros/s/AKfycbziuYcwWMhkJraJS_fXMuFkKrL1UXdcVCSJzIJyhvuMWO6CbjDmtQJcrk0y2fmRY2wzeQ/exec';
+    const body=JSON.stringify({kind:'fast_app_api',action:'bootstrap',initData:'invalid-diagnostic'});
+    const check=async (contentType)=>{
+      try {
+        const response=await fetch(backend,{method:'POST',headers:{'content-type':contentType},body,redirect:'follow',signal:AbortSignal.timeout(20000)});
+        const text=await response.text();
+        let parsed=null;
+        try{parsed=JSON.parse(text);}catch(_error){}
+        const hostname=new URL(response.url).hostname;
+        return {status:response.status,contentType:response.headers.get('content-type')||'',finalHost:hostname,
+          json:!!parsed, applicationResponse:!!parsed && typeof parsed.ok==='boolean',
+          htmlLogin:/accounts\.google\.com|signin|sign in|login/i.test(text.slice(0,3000)),
+          htmlError:/<html|<!doctype/i.test(text.slice(0,300)),
+          sample:parsed?{ok:parsed.ok,error:parsed.error}:text.replace(/<[^>]*>/g,' ').replace(/\s+/g,' ').slice(0,160)};
+      }catch(error){return {networkError:error?.name||'Error',message:String(error?.message||'').slice(0,100)};}
+    };
+    const result={json:await check('application/json;charset=UTF-8'),plain:await check('text/plain;charset=utf-8')};
+    return Response.json({ok:true,diagnostic:result},{headers:{'Cache-Control':'no-store'}});
+  }
   if (request.method !== 'POST') {
     return Response.json({ok:false,error:'Faqat POST qabul qilinadi.'},{status:405});
   }

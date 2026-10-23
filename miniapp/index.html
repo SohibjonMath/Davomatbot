@@ -135,16 +135,13 @@
       states:{},monthCache:new Map(),loadingMonths:new Set(),
       saving:false,dirty:false
     };
-    const weekdays=['Du','Se','Ço','Pa','Ju','Şa','Ya'];
     const months=['yanvar','fevral','mart','aprel','may','iyun','iyul','avgust','sentabr','oktabr','noyabr','dekabr'];
     const isoDay=date=>date.toISOString().slice(0,10);
     const pad=x=>String(x).padStart(2,'0');
     const dateParts=day=>day.split('-').map(Number);
     const shiftMonth=(month,delta)=>{const [y,m]=month.split('-').map(Number);const d=new Date(Date.UTC(y,m-1+delta,1));return isoDay(d).slice(0,7)};
-    const key=()=>S.classId+'|'+S.month;
     const monthOf=day=>day.slice(0,7);
     const curStudents=()=>S.data?.students.filter(x=>x.classId===S.classId)||[];
-    const btns=html=>html;
     function loading(flag){$('loader').classList.toggle('active',flag)}
     function announce(message,type=''){
       $('status').textContent=message;$('status').className='status'+(type?' '+type:'');
@@ -300,6 +297,12 @@
     function updateSave(){
       const n=S.dates.size,ready=n&&[...S.dates].every(day=>monthRecords(monthOf(day))!==null);
       $('save').disabled=!ready||S.saving||!curStudents().length;
+      $('classSelect').disabled=S.saving;
+      $('multi').disabled=S.saving;
+      $('clearDates').disabled=S.saving;
+      $('allPresent').disabled=S.saving;
+      $('prevMonth').disabled=S.saving||S.month<=S.data?.year.start.slice(0,7);
+      $('nextMonth').disabled=S.saving||S.month>=minMonth(S.data?.today||'9999-12-31',S.data?.year.end||'9999-12-31');
       $('save').innerHTML=S.saving?'<i class="fa-solid fa-spinner fa-spin"></i> Saqlanmoqda…':
         '<i class="fa-solid fa-floppy-disk"></i> Saqlaş'+(n>1?' ('+n+')':'');
     }

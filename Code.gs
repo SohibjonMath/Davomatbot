@@ -1904,8 +1904,23 @@ function ensureNotificationTrigger_() {
   const props=PropertiesService.getScriptProperties(),key='DAVOMAT_REMINDER_TRIGGER_MINUTES';
   const triggers=ScriptApp.getProjectTriggers().filter(t=>t.getHandlerFunction()==='processNotifications_');
   if(triggers.length===1&&props.getProperty(key)===String(cadence))return cadence;
-  triggers.forEach(t=>ScriptApp.deleteTrigger(t));
-  ScriptApp.newTrigger('processNotifications_').timeBased().everyMinutes(cadence).create();
+  // Create replacement before removing old triggers. A temporary Google
+  // service failure must not leave users without their existing reminders.
+  if(triggers.length===1 && props.getProperty(key)!==String(cadence)) {
+    const replacement=ScriptApp.newTrigger('processNotifications_')
+      .timeBased().everyMinutes(cadence).create();
+    try {ScriptApp.deleteTrigger(triggers[0]);}
+    catch(error) {console.error('Eski eslatma triggerini o‘chirish:',String(error));}
+    props.setProperty(key,String(cadence));
+    return cadence;
+  }
+  if(!triggers.length) {
+    ScriptApp.newTrigger('processNotifications_')
+      .timeBased().everyMinutes(cadence).create();
+  } else if(triggers.length>1) {
+    // Reduce accidental duplicates; keep one working trigger.
+    triggers.slice(1).forEach(t=>ScriptApp.deleteTrigger(t));
+  }
   props.setProperty(key,String(cadence));
   return cadence;
 }
@@ -2575,8 +2590,40 @@ function setupDavomatOne() {
   return syncDavomatYearSheets_(false);
 }
 
+// One-time setup from the Apps Script editor. Unlike installDavomatTriggers(),
+// this does not read Sheets or install unrelated academic-year maintenance jobs.
 function installNotificationTrigger() {
-  return installDavomatTriggers();
+  console.log('Eslatma triggeri: mavjud triggerlarni tekshirish');
+  try {
+    const triggers=ScriptApp.getProjectTriggers()
+      .filter(t=>t.getHandlerFunction()==='processNotifications_');
+    if(triggers.length) {
+      console.log('Eslatma triggeri allaqachon mavjud: '+triggers.length+' ta');
+      return {ok:true,created:false,count:triggers.length,
+        note:'Mavjud trigger saqlandi. Taqvim tezligi sozlamalar bilan boshqariladi.'};
+    }
+    console.log('Eslatma triggeri: har 5 daqiqada ishlaydigan vazifa yaratilmoqda');
+    ScriptApp.newTrigger('processNotifications_').timeBased().everyMinutes(5).create();
+    PropertiesService.getScriptProperties()
+      .setProperty('DAVOMAT_REMINDER_TRIGGER_MINUTES','5');
+    console.log('Eslatma triggeri muvaffaqiyatli o‘rnatildi.');
+    return {ok:true,created:true,intervalMinutes:5};
+  } catch(error) {
+    console.error('Eslatma triggeri bosqichida xato: '+String(error&&error.message||error));
+    throw error;
+  }
+}
+// Platform-level diagnostic: no Sheets, ScriptApp, Telegram or permissions.
+function testAppsScriptExecution() {
+  console.log('Apps Script muharriri ishlayapti: '+new Date().toISOString());
+  return 'OK';
+}
+// Read-only trigger status, useful after an "unknown error" in editor.
+function checkNotificationTrigger() {
+  const items=ScriptApp.getProjectTriggers()
+    .filter(t=>t.getHandlerFunction()==='processNotifications_');
+  console.log('Davomat eslatma triggerlari: '+items.length);
+  return {installed:items.length>0,count:items.length};
 }
 
 function installTelegramWebhook() {

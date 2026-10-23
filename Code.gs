@@ -702,19 +702,69 @@ function saveAttendance_(actor, classId, date, entries) {
   const year = findAcademicYearForDateFromRows_(getRowsAsObjects_(SHEETS.ACADEMIC_YEARS), dateKey);
   if (!year || String(year.status).toUpperCase() !== 'ACTIVE') throw new Error('Bu o‘quv yili faollashtirilmagan.');
   const students = listActiveRows_(SHEETS.STUDENTS).filter(row => sameClassId_(row.class_id, classId));
-  const byId = {};
-  (entries || []).forEach(entry => { byId[String(entry.studentId)] = entry; });
-  const existing = getRowsAsObjects_(SHEETS.ATTENDANCE);
-  const saved = [];
-  students.forEach(student => {
-    const entry = byId[String(student.student_id)];
-    const status = entry && ATTENDANCE_CYCLE.indexOf(entry.status) >= 0 ? entry.status : ATTENDANCE_STATUS.KELDI;
-    const row = existing.find(item => statisticsDateKey_(item.date) === dateKey && sameClassId_(item.class_id,classId) && String(item.student_id) === String(student.student_id));
-    const data = {status:status, updated_by:String(actor.telegramId), updated_at:new Date().toISOString(), academic_year_id:String(year.year_id)};
-    if (row) updateObjectRow_(SHEETS.ATTENDANCE,row._row,data);
-    else appendObjectRow_(SHEETS.ATTENDANCE,{date:dateKey,class_id:classIdKey_(classId),student_id:student.student_id,status:status,updated_by:String(actor.telegramId),updated_at:data.updated_at,academic_year_id:String(year.year_id)});
-    saved.push({studentId:Number(student.student_id),fullName:String(student.full_name),status:status});
-  });
+  const input = {};
+  (entries || []).forEach(item => { input[String(item.studentId)] = item; });
+  const lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+  let saved = [];
+  try {
+    // Index once: avoid one full-table search and several network calls per pupil.
+    const sheet = getSheet_(SHEETS.ATTENDANCE);
+    const headers = getHeaders_(SHEETS.ATTENDANCE);
+    const oldRows = getRowsAsObjects_(SHEETS.ATTENDANCE);
+    const byStudent = {};
+    oldRows.forEach(item => {
+      if (statisticsDateKey_(item.date) === dateKey && sameClassId_(item.class_id,classId))
+        byStudent[String(item.student_id)] = item;
+    });
+    const now = new Date().toISOString(), updates = [], additions = [];
+    saved = students.map(student => {
+      const entry = input[String(student.student_id)];
+      const status = entry && ATTENDANCE_CYCLE.indexOf(entry.status) >= 0 ? entry.status : ATTENDANCE_STATUS.KELDI;
+      const data = {status:status,updated_by:String(actor.telegramId),updated_at:now,academic_year_id:String(year.year_id)};
+      const existing = byStudent[String(student.student_id)];
+      if (existing) updates.push({row:existing._row,data:data});
+      else additions.push(headers.map(h => {
+        const values = Object.assign({date:dateKey,class_id:classIdKey_(classId),student_id:student.student_id},data);
+        return Object.prototype.hasOwnProperty.call(values,h) ? values[h] : '';
+      }));
+      return {studentId:Number(student.student_id),fullName:String(student.full_name),status:status};
+    });
+    // Existing records are generally contiguous by class/date. Write each contiguous
+    // block in one request instead of 4 * student_count individual cell updates.
+    updates.sort((a,b)=>a.row-b.row);
+    const statusCol=headers.indexOf('status')+1;
+    const layout=statusCol>0 && headers[statusCol]==='updated_by' &&
+      headers[statusCol+1]==='updated_at' && headers[statusCol+2]==='academic_year_id';
+    if (layout) {
+      let offset=0;
+      while(offset<updates.length) {
+        let end=offset+1;
+        while(end<updates.length && updates[end].row===updates[end-1].row+1) end++;
+        const block=updates.slice(offset,end);
+        sheet.getRange(block[0].row,statusCol,block.length,4).setValues(
+          block.map(item=>[item.data.status,item.data.updated_by,item.data.updated_at,item.data.academic_year_id])
+        );
+        offset=end;
+      }
+    } else {
+      updates.forEach(item=>updateObjectRow_(SHEETS.ATTENDANCE,item.row,item.data));
+    }
+    if (additions.length) {
+      const first = sheet.getLastRow()+1;
+      davomatEnsureSize_(sheet,first+additions.length-1,headers.length);
+      sheet.getRange(first,1,additions.length,headers.length).setValues(additions);
+    }
+    invalidateSheet_(SHEETS.ATTENDANCE);
+    // Keep the human-readable annual view consistent while holding the write lock.
+    try {
+      davomatUpdateYearSheet_(String(year.year_id),classId,dateKey,saved);
+    } catch (viewError) {
+      console.error('Yillik davomat varag‘i yangilanmadi:',viewError && viewError.message ? viewError.message : viewError);
+    }
+  } finally {
+    lock.releaseLock();
+  }
   return saved;
 }
 

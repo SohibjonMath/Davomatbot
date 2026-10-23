@@ -2479,11 +2479,14 @@ function fastAppParseInitData_(raw) {
 // signed initData is rejected. Returns only public bot identity, never token.
 function checkDavomatBotIdentity() {
   const info=telegramCall_('getMe',{});
-  return {
+  const result={
     username:'@'+String(info.username||''),
     expected:'@imi_davomat_bot',
     correctBot:String(info.username||'').toLowerCase()==='imi_davomat_bot'
   };
+  // Only the public username and a boolean appear in Execution log. Never log bot tokens.
+  console.log('Davomat Mini App bot:',JSON.stringify(result));
+  return result;
 }
 function fastAppActor_(initData) {
   const user=fastAppParseInitData_(initData);

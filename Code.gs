@@ -1907,7 +1907,7 @@ function statusLabel_(status) {
 // ===== Setup.gs =====
 
 function ensureSchema_() {
-  Object.keys(SHEET_HEADERS).forEach(name => ensureSheetSchema_(name, SHEET_HEADERS[name]));
+  Object.keys(SHEET_HEADERS).forEach(key => ensureSheetSchema_(SHEETS[key], SHEET_HEADERS[key]));
   return true;
 }
 
@@ -1940,7 +1940,7 @@ function diagnoseDavomatOne() {
   const ss = getSpreadsheet_();
   result.spreadsheet_id = ss.getId();
   result.spreadsheet_name = ss.getName();
-  result.sheets = Object.keys(SHEET_HEADERS).map(name => ({ name: name, exists: Boolean(ss.getSheetByName(name)) }));
+  result.sheets = Object.keys(SHEET_HEADERS).map(key => ({ name: SHEETS[key], exists: Boolean(ss.getSheetByName(SHEETS[key])) }));
   result.super_admin_id_set = Boolean(PropertiesService.getScriptProperties().getProperty(PROPERTY_KEYS.SUPER_ADMIN_ID));
   result.web_app_url = getWebAppUrl_();
   result.webhook = telegramCall_('getWebhookInfo', {});

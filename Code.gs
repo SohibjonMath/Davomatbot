@@ -2336,7 +2336,10 @@ function answerCallback_(callbackQueryId, text) {
 
 
 function getFastDavomatUrl_() {
-  const url=String(PropertiesService.getScriptProperties().getProperty('DAVOMAT_MINIAPP_URL')||'').trim();
+  // Non-secret public domain: use one default for everyone; Script Properties
+  // override remains available if the site is renamed in the future.
+  const configured=String(PropertiesService.getScriptProperties().getProperty('DAVOMAT_MINIAPP_URL')||'').trim();
+  const url=configured||'https://davomat-imi.netlify.app/';
   return /^https:\/\/[^/\s]+(?:\/[^\s]*)?$/.test(url)?url:'';
 }
 function sendFastDavomatLink_(chatId) {
@@ -2368,6 +2371,22 @@ function buildMainMenu_(actor) {
     keyboard = [['Davomat','Öquvçilar'],['Sozlamalar']];
   } else if (actor.role === ROLES.UNASSIGNED) {
     keyboard = [['Sinf tanlash']];
+  }
+  // Reply-keyboard Web App buttons launch their pages directly in private
+  // Telegram chats instead of sending slow text commands to Apps Script.
+  const url=getFastDavomatUrl_();
+  const pages={
+    'Davomat':'attendance','Bugungi davomat':'attendance',
+    'Statistika':'statistics','Sinflar':'classes','Öquvçilar':'students',
+    'O‘quv yili':'year','Taqvim':'calendar','Adminlar':'admins','Sozlamalar':'settings'
+  };
+  if(url&&actor.role!==ROLES.UNASSIGNED) {
+    keyboard=keyboard.map(row=>row.map(label=>{
+      const page=pages[label];
+      if(!page)return label;
+      const cleanUrl=url.split(/[?#]/)[0].replace(/\/$/,'')+'/';
+      return {text:label,web_app:{url:cleanUrl+'?page='+page}};
+    }));
   }
   return { keyboard: keyboard, resize_keyboard: true, is_persistent: true };
 }

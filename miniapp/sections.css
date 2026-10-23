@@ -70,3 +70,7 @@
   .stateLabel{align-self:flex-start}
   .sectionMetric{padding:12px}
 }
+
+.controlFilters{display:flex;gap:6px;flex-wrap:wrap;max-width:100%;margin:11px 0 14px}
+.controlFilters .sectionButton{font-size:11px;padding:6px 9px;min-height:32px}
+.controlFilters .sectionButton[aria-pressed=true]{background:#002050;border-color:#002050;color:#fff}

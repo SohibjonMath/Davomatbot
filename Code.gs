@@ -754,7 +754,8 @@ function attendanceBulkValidate_(actor,classId,data) {
 // The annual grid is preferred; raw log is the fallback on pre-migration Sheets.
 function attendanceMonthStatus_(classId,month) {
   const result={};
-  const sheet=getSpreadsheet_().getSheetByName(davomatYearName_(davomatYearId_(month+'-01')));
+  const sheet=typeof SpreadsheetApp!=='undefined'
+    ?getSpreadsheet_().getSheetByName(davomatYearName_(davomatYearId_(month+'-01'))):null;
   if(sheet&&sheet.getLastColumn()>=4&&sheet.getLastRow()>1) {
     const last=sheet.getLastColumn(),head=sheet.getRange(1,4,1,last-3).getDisplayValues()[0];
     const cols=[];

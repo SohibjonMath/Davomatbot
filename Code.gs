@@ -785,6 +785,7 @@ function saveAttendance_(actor, classId, date, entries) {
       sheet.getRange(first,1,additions.length,headers.length).setValues(additions);
     }
     invalidateSheet_(SHEETS.ATTENDANCE);
+    davomatBumpRevision_();
     // Keep the human-readable annual view consistent while holding the write lock.
     try {
       davomatUpdateYearSheet_(String(year.year_id),classId,dateKey,saved);
@@ -915,6 +916,29 @@ function buildAttendanceView_(actor, classId, date) {
 }
 
 
+
+// Versioned statistic snapshots: revisit admin panels without re-reading full history.
+function davomatCacheRevision_() {
+  try { return CacheService.getScriptCache().get('davomat:data_revision') || '0'; }
+  catch (_error) { return '0'; }
+}
+function davomatBumpRevision_() {
+  try { CacheService.getScriptCache().put('davomat:data_revision', String(Date.now()), 21600); }
+  catch (_error) {}
+}
+function davomatCachedModel_(key, makeModel) {
+  try {
+    const cache=CacheService.getScriptCache(), value=cache.get(key);
+    if(value) return JSON.parse(value);
+  } catch(_error) {}
+  const result=makeModel();
+  try {
+    const json=JSON.stringify(result);
+    if(json.length<85000) CacheService.getScriptCache().put(key,json,30);
+  } catch(_error) {}
+  return result;
+}
+
 // ===== Statistics.gs =====
 
 function canViewStatistics_(actor) {
@@ -1007,16 +1031,15 @@ function buildStatisticsModelFromRows_(classes, students, attendanceRows, users,
 }
 
 function getTodayStatisticsModel_(dateKey) {
-  const date = dateKey || todayKey_();
-  const classes = typeof stabilizeAllClassIds_ === 'function' ? stabilizeAllClassIds_() : listActiveClasses_();
-  return buildStatisticsModelFromRows_(
-    classes,
-    getRowsAsObjects_(SHEETS.STUDENTS),
-    getRowsAsObjects_(SHEETS.ATTENDANCE),
-    getRowsAsObjects_(SHEETS.USERS),
-    getSuperAdminId_(),
-    date
-  );
+  const date=dateKey || todayKey_();
+  const cacheKey='davomat:today:' + date + ':' + davomatCacheRevision_();
+  return davomatCachedModel_(cacheKey, () => {
+    const classes=typeof stabilizeAllClassIds_ === 'function' ? stabilizeAllClassIds_() : listActiveClasses_();
+    return buildStatisticsModelFromRows_(
+      classes,getRowsAsObjects_(SHEETS.STUDENTS),getRowsAsObjects_(SHEETS.ATTENDANCE),
+      getRowsAsObjects_(SHEETS.USERS),getSuperAdminId_(),date
+    );
+  });
 }
 
 function formatStatisticsTime_(value) {
@@ -1252,12 +1275,13 @@ function buildStatisticsRangeModelFromRows_(classes, students, attendanceRows, u
 
 function getStatisticsRangeModel_(actor) {
   if (!canViewStatistics_(actor)) throw new Error('Ruxsat yo‘q.');
-  const range = getStatisticsRange_(actor.telegramId);
-  return buildStatisticsRangeModelFromRows_(
-    getRowsAsObjects_(SHEETS.CLASSES), getRowsAsObjects_(SHEETS.STUDENTS), getRowsAsObjects_(SHEETS.ATTENDANCE),
-    getRowsAsObjects_(SHEETS.USERS), getSuperAdminId_(), range.start, range.end,
-    getRowsAsObjects_(SHEETS.ACADEMIC_YEARS), getRowsAsObjects_(SHEETS.CLASS_HISTORY), getRowsAsObjects_(SHEETS.CALENDAR)
-  );
+  const range=getStatisticsRange_(actor.telegramId);
+  const key='davomat:range:' + range.start + ':' + range.end + ':' + davomatCacheRevision_();
+  return davomatCachedModel_(key,()=>buildStatisticsRangeModelFromRows_(
+    getRowsAsObjects_(SHEETS.CLASSES),getRowsAsObjects_(SHEETS.STUDENTS),getRowsAsObjects_(SHEETS.ATTENDANCE),
+    getRowsAsObjects_(SHEETS.USERS),getSuperAdminId_(),range.start,range.end,
+    getRowsAsObjects_(SHEETS.ACADEMIC_YEARS),getRowsAsObjects_(SHEETS.CLASS_HISTORY),getRowsAsObjects_(SHEETS.CALENDAR)
+  ));
 }
 
 function showStatisticsPeriodMenu_(chatId, actor) {

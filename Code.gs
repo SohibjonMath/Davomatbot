@@ -2334,6 +2334,28 @@ function answerCallback_(callbackQueryId, text) {
 }
 
 
+
+function getFastDavomatUrl_() {
+  const url=String(PropertiesService.getScriptProperties().getProperty('DAVOMAT_MINIAPP_URL')||'').trim();
+  return /^https:\/\/[^/\s]+(?:\/[^\s]*)?$/.test(url)?url:'';
+}
+function sendFastDavomatLink_(chatId) {
+  const url=getFastDavomatUrl_();
+  if(!url)return false;
+  sendMessage_(chatId,'Davomatni tezkor oynada oching. Sana va öquvchilarni bir martada belgilashingiz mumkin.',
+    buildInlineKeyboard_([[{text:'Tezkor davomatni ochish',web_app:{url:url}}]]));
+  return true;
+}
+// One-time opt-in setup. Telegram opens this menu button without waiting for
+// a Google Apps Script webhook, removing the slowest tap from the journey.
+function installFastDavomatMenu() {
+  const url=getFastDavomatUrl_();
+  if(!url)throw new Error('Script Properties ichida DAVOMAT_MINIAPP_URL ni sozlang.');
+  return telegramCall_('setChatMenuButton',{
+    menu_button:{type:'web_app',text:'Tezkor davomat',web_app:{url:url}}
+  });
+}
+
 // ===== Ui.gs =====
 
 function buildMainMenu_(actor) {
@@ -2343,7 +2365,7 @@ function buildMainMenu_(actor) {
   } else if (actor.role === ROLES.ADMIN) {
     keyboard = [['Davomat','Statistika'],['Sinflar','Öquvçilar'],['O‘quv yili','Taqvim'],['Sozlamalar']];
   } else if (actor.role === ROLES.TEACHER) {
-    keyboard = [['Bugungi davomat','Öquvçilar'],['Sana tanlash','Sozlamalar']];
+    keyboard = [['Davomat','Öquvçilar'],['Sozlamalar']];
   } else if (actor.role === ROLES.UNASSIGNED) {
     keyboard = [['Sinf tanlash']];
   }
@@ -2821,16 +2843,18 @@ function handleText_(message, actor) {
   }
 
   if (text === 'Davomat') {
-    if (actor.role === ROLES.TEACHER) showAttendanceForClass_(chatId, null, actor, actor.classId, todayKey_(), false);
-    else sendMessage_(chatId, 'Sinfni tanlang.', classChoiceKeyboard_('att:class', true));
+    if (!sendFastDavomatLink_(chatId)) {
+      if (actor.role === ROLES.TEACHER) showAttendanceForClass_(chatId, null, actor, actor.classId, todayKey_(), false);
+      else sendMessage_(chatId, 'Sinfni tanlang.', classChoiceKeyboard_('att:class', true));
+    }
     return;
   }
   if (text === 'Bugungi davomat') {
-    showAttendanceForClass_(chatId, null, actor, actor.classId, todayKey_(), false);
+    if (!sendFastDavomatLink_(chatId)) showAttendanceForClass_(chatId, null, actor, actor.classId, todayKey_(), false);
     return;
   }
   if (text === 'Oldingi davomatlar' || text === 'Sana tanlash') {
-    showHistory_(chatId, actor, actor.classId);
+    if (!sendFastDavomatLink_(chatId)) showHistory_(chatId, actor, actor.classId);
     return;
   }
   if (text === 'Sinflar') {

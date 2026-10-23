@@ -1,7 +1,7 @@
 // Single API gateway for Telegram Mini App; Telegram identity is verified in Apps Script.
 // The Apps Script deployment URL is public configuration, not a credential.
 const BACKEND_URL = 'https://script.google.com/macros/s/AKfycbziuYcwWMhkJraJS_fXMuFkKrL1UXdcVCSJzIJyhvuMWO6CbjDmtQJcrk0y2fmRY2wzeQ/exec';
-const ACTIONS = new Set(['bootstrap', 'month', 'save']);
+const ACTIONS = new Set(['bootstrap', 'month', 'save', 'section', 'manage']);
 const noCache = { 'Cache-Control': 'no-store' };
 
 function failure(message, status) {
@@ -12,7 +12,7 @@ async function forward(body, action) {
   // A ContentService reply normally redirects to script.googleusercontent.com.
   // Retry *reads only* if the redirect fails or Google temporarily returns HTML.
   // Never replay a write after an ambiguous response.
-  const attempts = action === 'save' ? 1 : 2;
+  const attempts = action === 'save' || action === 'manage' ? 1 : 2;
   const payload = JSON.stringify({ ...body, kind: 'fast_app_api' });
   for (let attempt = 0; attempt < attempts; attempt++) {
     let upstream;
@@ -44,7 +44,7 @@ async function forward(body, action) {
       }));
       if (attempt + 1 === attempts) {
         return failure(
-          action === 'save'
+          (action === 'save' || action === 'manage')
             ? 'Javob olinmadi. Qayta saqlashdan oldin davomatni tekşiring.'
             : 'Davomatni yüklab bo‘lmadi. Qayta ochib ko‘ring.',
           502
@@ -56,7 +56,7 @@ async function forward(body, action) {
       }));
       if (attempt + 1 === attempts) {
         return failure(
-          action === 'save'
+          (action === 'save' || action === 'manage')
             ? 'Saqlash javobi olinmadi. Davomatni tekşirib ko‘ring.'
             : 'Davomat serveri bilan aloqa vaqtincha uzildi.',
           error?.name === 'TimeoutError' ? 504 : 502

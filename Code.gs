@@ -2571,11 +2571,128 @@ function fastAppSave_(actor,classId,dates,entries) {
   const result=saveAttendanceMany_(actor,classId,dates,entries);
   return {dates:result.dates,summary:attendanceSummary_(result.saved),savedAt:new Date().toISOString()};
 }
+
+ // ===== FastSections.gs =====
+ // All pages use the same validated Telegram identity, class permissions and
+ // existing Sheets business rules; the Mini App never receives server secrets.
+ function fastAppPages_(actor) {
+   if(actor.role===ROLES.SUPER_ADMIN)
+     return ['attendance','statistics','classes','students','year','calendar','admins','settings'];
+   if(actor.role===ROLES.ADMIN)
+     return ['attendance','statistics','classes','students','year','calendar','settings'];
+   return ['attendance','students','settings'];
+ }
+ function fastAppSection_(actor,page,options) {
+   if(fastAppPages_(actor).indexOf(page)<0)throw new Error('Bu bo‘limga ruxsat yo‘q.');
+   const opts=options||{},today=todayKey_();
+   if(page==='classes') {
+     const students=getRowsAsObjects_(SHEETS.STUDENTS).filter(row=>isActiveFlag_(row.active));
+     const users=getRowsAsObjects_(SHEETS.USERS);
+     return {page:page,items:listActiveClasses_().map(row=>{
+       const owner=users.find(user=>String(user.telegram_id)===String(row.teacher_telegram_id));
+       return {id:classIdKey_(row.class_id),name:String(row.class_name),
+         teacher:owner?String(owner.full_name):'',teacherId:String(row.teacher_telegram_id||''),
+         students:students.filter(s=>sameClassId_(s.class_id,row.class_id)).length};
+     })};
+   }
+   if(page==='students') {
+     const classes=fastAppAllowedClasses_(actor),ids=classes.map(row=>classIdKey_(row.class_id));
+     const students=getRowsAsObjects_(SHEETS.STUDENTS).filter(row=>isActiveFlag_(row.active)&&ids.indexOf(classIdKey_(row.class_id))>=0);
+     return {page:page,classes:classes.map(row=>({id:classIdKey_(row.class_id),name:String(row.class_name)})),
+       items:students.map(row=>({id:Number(row.student_id),name:String(row.full_name),classId:classIdKey_(row.class_id)}))};
+   }
+   if(page==='statistics') {
+     const start=String(opts.start||opts.date||today),end=String(opts.end||opts.date||start);
+     if(!validDateKey_(start)||!validDateKey_(end)||start>end||end>today)
+       throw new Error('Statistika sanasi noto‘g‘ri.');
+     if(start===end){
+       const model=buildStatisticsModelFromRows_(listActiveClasses_(),getRowsAsObjects_(SHEETS.STUDENTS),
+         getRowsAsObjects_(SHEETS.ATTENDANCE),getRowsAsObjects_(SHEETS.USERS),getSuperAdminId_(),start);
+       return {page:page,mode:'day',model:model};
+     }
+     const range=buildStatisticsRangeModelFromRows_(getRowsAsObjects_(SHEETS.CLASSES),
+       getRowsAsObjects_(SHEETS.STUDENTS),getRowsAsObjects_(SHEETS.ATTENDANCE),
+       getRowsAsObjects_(SHEETS.USERS),getSuperAdminId_(),start,end,
+       getRowsAsObjects_(SHEETS.ACADEMIC_YEARS),getRowsAsObjects_(SHEETS.CLASS_HISTORY),
+       getRowsAsObjects_(SHEETS.CALENDAR));
+     return {page:page,mode:'range',model:range};
+   }
+   if(page==='year') {
+     const years=getRowsAsObjects_(SHEETS.ACADEMIC_YEARS);
+     const history=getRowsAsObjects_(SHEETS.CLASS_HISTORY);
+     return {page:page,years:years.map(row=>({
+       id:String(row.year_id),title:String(row.title||row.year_id),
+       start:statisticsDateKey_(row.start_date),end:statisticsDateKey_(row.end_date),
+       promotion:statisticsDateKey_(row.promotion_date),status:String(row.status),
+       promotedAt:String(row.promoted_at||'')})),
+       archive:history.map(row=>({yearId:String(row.academic_year_id),className:String(row.class_name),
+         status:String(row.status)}))};
+   }
+   if(page==='calendar') {
+     return {page:page,items:getRowsAsObjects_(SHEETS.CALENDAR)
+       .filter(row=>isActiveFlag_(row.active))
+       .map(row=>({id:String(row.event_id),type:String(row.type),title:String(row.title),
+         start:statisticsDateKey_(row.start_date),end:statisticsDateKey_(row.end_date)}))
+       .sort((a,b)=>a.start.localeCompare(b.start))};
+   }
+   if(page==='admins') {
+     return {page:page,items:getRowsAsObjects_(SHEETS.USERS)
+       .filter(row=>row.role===ROLES.ADMIN&&isActiveFlag_(row.active))
+       .map(row=>({id:String(row.telegram_id),name:String(row.full_name)}))};
+   }
+   if(page==='settings') {
+     const settings=getNotificationSettings_(actor.telegramId);
+     return {page:page,notifications:{enabled:Boolean(settings.enabled),time:String(settings.time||'08:00')},
+       className:actor.role===ROLES.TEACHER
+         ?String((findRowByValue_(SHEETS.CLASSES,'class_id',actor.classId)||{}).class_name||''):'',
+       role:actor.role};
+   }
+   throw new Error('Bo‘lim topilmadi.');
+ }
+ function fastAppManage_(actor,operation,body) {
+   const op=String(operation||''),classId=String(body.classId||'');
+   if(op==='class.add')return addClass_(actor,body.name);
+   if(op==='class.rename')return renameClass_(actor,classId,body.name);
+   if(op==='class.remove')return deactivateClass_(actor,classId);
+   if(op==='student.add') {
+     if(!canManageStudentsInClass_(actor,classId))throw new Error('Ruxsat yo‘q.');
+     return addStudentsBulk_(actor,classId,String(body.names||''));
+   }
+   if(op==='student.remove')return deactivateStudent_(actor,body.id);
+   if(op==='calendar.add')return addCalendarEvent_(actor,{
+     type:body.type,start_date:body.start,end_date:body.end,title:body.title
+   });
+   if(op==='calendar.remove')return deactivateCalendarEvent_(actor,body.id);
+   if(op==='admin.add')return addAdmin_(actor,body.id,body.name);
+   if(op==='admin.remove')return removeAdmin_(actor,body.id);
+   if(op==='year.create')return createAcademicYear_(actor,{
+     year_id:String(body.yearId||''),title:String(body.title||''),
+     start_date:body.start,end_date:body.end,promotion_date:body.promotion,status:'PLANNED'
+   });
+   if(op==='year.promotion')return updatePromotionDate_(actor,String(body.yearId||''),String(body.date||''));
+   if(op==='year.newFive')return createClassForAcademicYear_(actor,String(body.yearId||''),String(body.name||''));
+   if(op==='year.activate')return initializeCurrentAcademicYear_(actor,String(body.yearId||''));
+   if(op==='settings.save') {
+     const next={};
+     if(Object.prototype.hasOwnProperty.call(body,'enabled'))next.enabled=body.enabled===true;
+     if(Object.prototype.hasOwnProperty.call(body,'time'))next.time=normalizeNotificationTime_(body.time);
+     return saveNotificationSettings_(actor.telegramId,next);
+   }
+   throw new Error('Bunday amal mavjud emas.');
+ }
+
 function fastAppApi_(body) {
   const actor=fastAppActor_(body.initData);
-  if(body.action==='bootstrap')return fastAppBootstrap_(actor);
+  if(body.action==='bootstrap') {
+    const result=fastAppBootstrap_(actor);
+    result.role=actor.role;
+    result.pages=fastAppPages_(actor);
+    return result;
+  }
   if(body.action==='month')return fastAppMonth_(actor,String(body.classId||''),String(body.month||''));
   if(body.action==='save')return fastAppSave_(actor,String(body.classId||''),body.dates,body.entries);
+  if(body.action==='section')return fastAppSection_(actor,String(body.page||''),body.options||{});
+  if(body.action==='manage')return fastAppManage_(actor,body.operation,body);
   throw new Error('Amal topilmadi.');
 }
 function fastAppJson_(value) {

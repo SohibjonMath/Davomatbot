@@ -2372,8 +2372,9 @@ function buildMainMenu_(actor) {
   } else if (actor.role === ROLES.UNASSIGNED) {
     keyboard = [['Sinf tanlash']];
   }
-  // Reply-keyboard Web App buttons launch their pages directly in private
-  // Telegram chats instead of sending slow text commands to Apps Script.
+  // Telegram's reply-keyboard Mini Apps may not receive signed initData.
+  // Use inline web_app buttons instead: they provide signed Telegram identity,
+  // which our server requires to enforce each school role's permissions.
   const url=getFastDavomatUrl_();
   const pages={
     'Davomat':'attendance','Bugungi davomat':'attendance',
@@ -2381,14 +2382,12 @@ function buildMainMenu_(actor) {
     'O‘quv yili':'year','Taqvim':'calendar','Adminlar':'admins','Sozlamalar':'settings'
   };
   if(url&&actor.role!==ROLES.UNASSIGNED) {
-    keyboard=keyboard.map(row=>row.map(label=>{
-      const page=pages[label];
-      if(!page)return label;
-      const cleanUrl=url.split(/[?#]/)[0].replace(/\/$/,'')+'/';
-      return {text:label,web_app:{url:cleanUrl+'?page='+page}};
-    }));
+    const cleanUrl=url.split(/[?#]/)[0].replace(/\/$/,'')+'/';
+    return buildInlineKeyboard_(keyboard.map(row=>row.map(label=>({
+      text:label,web_app:{url:cleanUrl+'?page='+pages[label]}
+    }))));
   }
-  return { keyboard: keyboard, resize_keyboard: true, is_persistent: true };
+  return {keyboard:keyboard,resize_keyboard:true,is_persistent:true};
 }
 
 function buildInlineKeyboard_(rows) {
@@ -2792,7 +2791,10 @@ function handleCommand_(message, actor) {
       showAvailableClasses_(message.chat.id);
       return;
     }
-    sendMessage_(message.chat.id, 'DavomatOne tayyor.', buildMainMenu_(actor));
+    // One-time migration: remove the old reply keyboard. Every new menu
+    // action is a signed inline Mini App button in the next message.
+    sendMessage_(message.chat.id,'Davomat menyusi yangilandi.',{remove_keyboard:true});
+    sendMessage_(message.chat.id,'Kerakli bo‘limni oching.',buildMainMenu_(actor));
     return;
   }
   if (actor.role === ROLES.UNASSIGNED) {

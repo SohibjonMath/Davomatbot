@@ -29,7 +29,8 @@ const ROLES = Object.freeze({
   SUPER_ADMIN: 'SUPER_ADMIN',
   ADMIN: 'ADMIN',
   TEACHER: 'TEACHER',
-  UNASSIGNED: 'UNASSIGNED'
+  UNASSIGNED: 'UNASSIGNED',
+  REVOKED: 'REVOKED'
 });
 const ATTENDANCE_STATUS = Object.freeze({ KELDI: 'KELDI', SABABLI: 'SABABLI', SABABSIZ: 'SABABSIZ' });
 const ATTENDANCE_CYCLE = Object.freeze(['KELDI','SABABLI','SABABSIZ']);
@@ -327,6 +328,53 @@ function deactivateClass_(actor, classId) {
 }
 
 
+
+// ===== ClassTeacherAdmin.gs =====
+// Admin assignment and revocation keep student records and saved attendance intact.
+// REVOKED users cannot immediately claim a vacant class themselves.
+function changeClassTeacher_(actor,classId,expectedTeacherId,nextTeacherId,fullName) {
+  if(!canManageClasses_(actor))throw new Error('Ruxsat yo‘q.');
+  const classKey=classIdKey_(classId);
+  if(!classKey)throw new Error('Sinfni tanlang.');
+  const expected=String(expectedTeacherId||'').trim();
+  const next=String(nextTeacherId||'').trim();
+  if(next)assertEditableUserId_(next);
+  const lock=LockService.getScriptLock();
+  lock.waitLock(12000);
+  try {
+    const row=findRowByValue_(SHEETS.CLASSES,'class_id',classKey);
+    if(!row||!isActiveFlag_(row.active))throw new Error('Sinf topilmadi.');
+    const current=String(row.teacher_telegram_id||'').trim();
+    if(current!==expected)throw new Error('Sinf rahbari o‘zgargan. Sahifani yangilang.');
+    if(!next&&!current)throw new Error('Bu sinfga rahbar biriktirilmagan.');
+    if(next===current)throw new Error('Bu rahbar allaqachon shu sinfda.');
+    let incoming=null,name='';
+    if(next) {
+      incoming=findRowByValue_(SHEETS.USERS,'telegram_id',next);
+      if(incoming && incoming.role===ROLES.ADMIN)
+        throw new Error('Administratorni sinf rahbari qilib bo‘lmaydi.');
+      if(incoming && incoming.role===ROLES.TEACHER && isActiveFlag_(incoming.active) &&
+          String(incoming.class_id||'').trim() && !sameClassId_(incoming.class_id,classKey))
+        throw new Error('Bu rahbar boshqa sinfga biriktirilgan. Avval o‘sha sinfdan olib tashlang.');
+      const otherClass=listActiveClasses_().find(item=>
+        !sameClassId_(item.class_id,classKey) && String(item.teacher_telegram_id||'').trim()===next);
+      if(otherClass)throw new Error('Bu rahbar '+String(otherClass.class_name)+' sinfiga biriktirilgan.');
+      name=normalizeName_(String(fullName||'').trim()||(incoming&&incoming.full_name)||'');
+    }
+    if(current) {
+      const former=findRowByValue_(SHEETS.USERS,'telegram_id',current);
+      if(former && former.role===ROLES.TEACHER && sameClassId_(former.class_id,classKey))
+        updateObjectRow_(SHEETS.USERS,former._row,{role:ROLES.REVOKED,active:false,class_id:''});
+    }
+    if(next)upsertUser_(next,name,ROLES.TEACHER,classKey,true);
+    updateObjectRow_(SHEETS.CLASSES,row._row,{teacher_telegram_id:next});
+    syncCurrentClassHistoryTeacher_(classKey,next);
+    return {classId:classKey,teacherId:next,teacherName:name};
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 // ===== Students.gs =====
 
 function listActiveStudentsByClass_(classId) {
@@ -423,6 +471,8 @@ function claimClass_(telegramId, fullName, classId) {
   lock.waitLock(10000);
   try {
     const existing = findRowByValue_(SHEETS.USERS, 'telegram_id', id);
+    if (existing && existing.role === ROLES.REVOKED)
+      throw new Error('Sinf rahbarligi huquqi bekor qilingan. Administratorga murojaat qiling.');
     if (existing && (existing.active === true || String(existing.active).toLowerCase() === 'true')) {
       if (existing.role === ROLES.ADMIN) throw new Error('Admin sinf rahbari sifatida sinf tanlay olmaydi.');
       if (existing.role === ROLES.TEACHER && existing.class_id !== '') {
@@ -2738,6 +2788,8 @@ function fastAppControl_(actor,dateKey) {
    if(op==='class.add')return addClass_(actor,body.name);
    if(op==='class.rename')return renameClass_(actor,classId,body.name);
    if(op==='class.remove')return deactivateClass_(actor,classId);
+   if(op==='class.teacher.remove')return changeClassTeacher_(actor,classId,body.expectedTeacherId,'','');
+   if(op==='class.teacher.assign')return changeClassTeacher_(actor,classId,body.expectedTeacherId,body.id,body.name);
    if(op==='student.add') {
      if(!canManageStudentsInClass_(actor,classId))throw new Error('Ruxsat yo‘q.');
      return addStudentsBulk_(actor,classId,String(body.names||''));

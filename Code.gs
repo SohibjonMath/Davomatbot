@@ -60,6 +60,14 @@ function getSheet_(name) {
     sheet = ss.getSheetByName('ATTENDANCE');
     if (sheet) sheet.setName(name);
   }
+  // Lazy, non-destructive migration for pre-upgrade spreadsheets. No per-click
+  // schema scan: only missing sheets are initialized.
+  if (!sheet) {
+    const sheetKey = Object.keys(SHEETS).find(key => SHEETS[key] === name);
+    if (!sheetKey) throw new Error('Sahifa topilmadi: ' + name);
+    ensureSheetSchema_(name, SHEET_HEADERS[sheetKey]);
+    sheet = ss.getSheetByName(name);
+  }
   if (!sheet) throw new Error('Sahifa topilmadi: ' + name);
   return _sheetMemo[name] = sheet;
 }
@@ -1524,7 +1532,36 @@ function enumerateSchoolDaysFromRows_(years, calendarRows, startDate, endDate) {
   return enumerateDateKeys_(startDate, endDate).filter(date => resolveSchoolDayFromRows_(years, calendarRows, date));
 }
 
+// A bot upgraded from the old five-tab spreadsheet has no academic-year
+// settings. Initialize only an entirely empty year table; never alter any
+// previously configured academic year or its historical records.
+function ensureInitialAcademicYear_() {
+  if (getRowsAsObjects_(SHEETS.ACADEMIC_YEARS).length) return false;
+  const lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+  try {
+    const sheet = getSheet_(SHEETS.ACADEMIC_YEARS);
+    if (sheet.getLastRow() > 1) {
+      invalidateSheet_(SHEETS.ACADEMIC_YEARS);
+      return false;
+    }
+    const date = todayKey_();
+    const year = Number(date.slice(0,4)) - (Number(date.slice(5,7)) < 7 ? 1 : 0);
+    const yearId = year + '-' + (year + 1);
+    appendObjectRow_(SHEETS.ACADEMIC_YEARS, {
+      year_id:yearId, title:year + '/' + (year + 1),
+      start_date:year + '-09-02', end_date:(year + 1) + '-05-25',
+      promotion_date:(year + 1) + '-06-01', status:'ACTIVE',
+      promoted_at:'', activated_at:new Date().toISOString()
+    });
+    return true;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 function isSchoolDay_(dateKey) {
+  ensureInitialAcademicYear_();
   return resolveSchoolDayFromRows_(getRowsAsObjects_(SHEETS.ACADEMIC_YEARS), getRowsAsObjects_(SHEETS.CALENDAR), String(dateKey || '').slice(0,10));
 }
 
@@ -1533,6 +1570,7 @@ function enumerateSchoolDays_(startDate, endDate) {
 }
 
 function getActiveAcademicYear_() {
+  ensureInitialAcademicYear_();
   return getRowsAsObjects_(SHEETS.ACADEMIC_YEARS).find(row => String(row.status).toUpperCase() === 'ACTIVE') || null;
 }
 

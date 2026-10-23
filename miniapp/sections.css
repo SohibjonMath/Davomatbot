@@ -1,0 +1,39 @@
+.sectionsNav{display:flex;gap:6px;overflow-x:auto;padding:0 0 12px;margin:0 0 10px;scrollbar-width:thin}
+.sectionsNav button{border:1px solid #d9e0e8;background:#fff;color:#002050;padding:9px 12px;white-space:nowrap;border-radius:4px;font-weight:600;min-height:39px}
+.sectionsNav button[aria-current=page]{background:#002050;border-color:#002050;color:#fff}
+.sectionPanel{min-height:190px}
+.sectionHeading{display:flex;gap:9px;justify-content:space-between;align-items:center;flex-wrap:wrap;margin-bottom:14px}
+.sectionHeading h2{font-size:20px;margin:0;font-weight:700}
+.sectionToolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:12px 0}
+.sectionToolbar input,.sectionToolbar select,.sectionForm input,.sectionForm select,.sectionForm textarea{font:inherit;padding:9px 11px;min-height:39px;border:1px solid #d9e0e8;border-radius:4px;max-width:100%;background:#fff;color:#002050}
+.sectionToolbar input[type=date]{width:154px}
+.sectionToolbar input[type=search]{flex:1;min-width:130px}
+.sectionButton{background:#fff;border:1px solid #d9e0e8;border-radius:4px;padding:9px 12px;color:#002050;font-weight:600;min-height:38px}
+.sectionButton.accent{background:#F86000;border-color:#F86000;color:white}
+.sectionButton.danger{color:#ae3232;border-color:#e6c7c7}
+.sectionButton:disabled{opacity:.5}
+.sectionGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(135px,1fr));gap:10px;margin-bottom:12px}
+.sectionMetric{background:#f5f7fa;border:1px solid #d9e0e8;border-radius:4px;padding:15px}
+.sectionMetric span{display:block;color:#61718a;font-size:12px;margin-bottom:4px}
+.sectionMetric strong{font-size:24px;font-weight:700}
+.sectionList{display:flex;flex-direction:column;gap:7px}
+.sectionItem{border:1px solid #d9e0e8;border-radius:4px;background:#fff;padding:10px 12px;display:flex;align-items:center;justify-content:space-between;gap:10px;min-width:0}
+.sectionItem .details{flex:1;min-width:0}
+.sectionItem .details strong{display:block;font-size:14px;word-break:break-word}
+.sectionItem .details small{display:block;font-size:11px;color:#61718a;margin-top:3px;word-break:break-word}
+.sectionItem .actions{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+.sectionItem .actions .sectionButton{min-height:32px;padding:6px 9px;font-size:12px}
+.sectionPanel .card{margin-bottom:12px}
+.sectionEmpty{font-size:13px;color:#61718a;background:#f5f7fa;padding:14px;border:1px solid #d9e0e8;border-radius:4px}
+.sectionForm{display:grid;gap:12px}
+.sectionForm label{display:grid;gap:5px;font-size:12px;color:#61718a;font-weight:600}
+.sectionForm textarea{min-height:110px;resize:vertical;width:100%}
+.sectionForm input,.sectionForm select{width:100%}
+.sectionModal{border:1px solid #d9e0e8;border-radius:6px;padding:18px;width:min(440px,calc(100% - 24px));max-height:85vh;overflow:auto;box-shadow:0 10px 40px #00205027}
+.sectionModal::backdrop{background:#00205088}
+.sectionModal h3{font-size:18px;margin:0 0 12px}
+.sectionModal .modalActions{display:flex;gap:9px;justify-content:flex-end;margin-top:14px}
+.sectionMessage{margin:10px 0;font-size:12px;color:#61718a}
+.sectionMessage.error{color:#b13232}
+.sectionYearTag{display:inline-block;border:1px solid #cad8e8;border-radius:3px;padding:3px 6px;color:#002050;font-size:11px}
+@media(max-width:480px){.sectionItem{align-items:flex-start;flex-direction:column}.sectionItem .actions{align-self:stretch}.sectionItem .actions button{flex:1}.sectionHeading h2{font-size:18px}}

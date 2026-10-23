@@ -2700,6 +2700,44 @@ function handleCallback_(callbackQuery, actor, alreadyAnswered) {
       showAttendanceCalendar_(chatId,messageId,actor,p[2],p[3]||null,Boolean(messageId));
     } else if (p[0] === 'att' && p[1] === 'day') {
       showAttendanceForClass_(chatId,messageId,actor,p[2],p[3],Boolean(messageId));
+    } else if (data === 'att:noop') {
+      // Holiday, weekend and future date placeholders are intentionally inert.
+    } else if (p[0] === 'att' && p[1] === 'multi') {
+      attendanceBulkStart_(actor,p[2],p[3]);
+      showAttendanceCalendar_(chatId,messageId,actor,p[2],p[3],Boolean(messageId));
+    } else if (p[0] === 'att' && p[1] === 'pick') {
+      attendanceBulkToggle_(actor,p[2],p[3]);
+      showAttendanceCalendar_(chatId,messageId,actor,p[2],p[3].slice(0,7),Boolean(messageId));
+    } else if (p[0] === 'att' && p[1] === 'cancel') {
+      const bulk=attendanceBulkGet_(actor,p[2]);
+      attendanceBulkClear_(actor,p[2]);
+      showAttendanceCalendar_(chatId,messageId,actor,p[2],bulk&&bulk.month||null,Boolean(messageId));
+    } else if (p[0] === 'att' && p[1] === 'bulkform') {
+      const view=attendanceBulkFormView_(actor,p[2]);
+      if(messageId)editMessage_(chatId,messageId,view.text,view.replyMarkup);
+      else sendMessage_(chatId,view.text,view.replyMarkup);
+    } else if (p[0] === 'att' && ['bmark','bmode','ball'].indexOf(p[1])>=0) {
+      attendanceBulkEdit_(actor,p[2],p[1]==='bmark'?'mark':p[1]==='bmode'?'mode':'all',p[3],p[3]);
+      const view=attendanceBulkFormView_(actor,p[2]);
+      if(messageId)editMessage_(chatId,messageId,view.text,view.replyMarkup);
+      else sendMessage_(chatId,view.text,view.replyMarkup);
+    } else if (p[0] === 'att' && p[1] === 'breview') {
+      const view=attendanceBulkReviewView_(actor,p[2]);
+      if(messageId)editMessage_(chatId,messageId,view.text,view.replyMarkup);
+      else sendMessage_(chatId,view.text,view.replyMarkup);
+    } else if (p[0] === 'att' && p[1] === 'bcommit') {
+      const bulk=attendanceBulkGet_(actor,p[2]);
+      if(!bulk||bulk.stage!=='review')throw new Error('Avval ommaviy davomatni tasdiqlang.');
+      attendanceBulkValidate_(actor,p[2],bulk);
+      const outcome=saveAttendanceMany_(actor,p[2],bulk.dates,bulk.entries);
+      attendanceBulkClear_(actor,p[2]);
+      const summary=attendanceSummary_(outcome.saved);
+      const text='Saqlandi: '+outcome.dates.length+' ta sana.\n'+
+        'Keldi: '+summary.KELDI+' | Sababli: '+summary.SABABLI+' | Sababsiz: '+summary.SABABSIZ+
+        '\n\nKo‘rsatilgan sonlar har bir tanlangan kun uchun bir xil.';
+      const buttons=buildInlineKeyboard_([[{text:'Sanalar',callback_data:'att:days:'+p[2]+':'+outcome.dates[outcome.dates.length-1].slice(0,7)}]]);
+      if(messageId)editMessage_(chatId,messageId,text,buttons);
+      else sendMessage_(chatId,text,buttons);
     } else if (p[0] === 'att' && p[1] === 'mode') {
       const classId = p[2], date = p[3], mode = p[4];
       if (!canAccessClass_(actor,classId)) throw new Error('Ruxsat yo‘q.');

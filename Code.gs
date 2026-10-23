@@ -1889,7 +1889,7 @@ function notificationDue_(settings,now,nowTime,today) {
   if(!settings||settings.mode==='off'||settings.mutedDate===today)return false;
   const minutes=notificationMinutes_(nowTime),start=notificationMinutes_(settings.time);
   if(minutes<start)return false;
-  if(settings.mode==='once')return settings.lastDate!==today;
+  if(settings.mode==='once')return settings.lastDate!==today&&minutes<start+30;
   if(settings.mode!=='repeat'||minutes>=notificationMinutes_(settings.endTime))return false;
   if(!settings.lastSentAt)return true;
   const last=Date.parse(settings.lastSentAt);
